@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.mirfatif.permissionmanagerx.fwk.MyLinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:padding="8dp"
+  android:orientation="vertical">
+
+  <View
+    android:layout_width="20dp"
+    android:layout_height="6dp"
+    android:layout_gravity="center_horizontal"
+    android:background="@drawable/hinge" />
+
+  <com.mirfatif.permissionmanagerx.fwk.MyLinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="24dp"
+    android:orientation="vertical">
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/button1"
+      style="@style/CustomButton" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/button2"
+      style="@style/CustomButton"
+      android:layout_marginTop="8dp" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/button3"
+      style="@style/CustomButton"
+      android:layout_marginTop="8dp" />
+
+  </com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>
+</com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>

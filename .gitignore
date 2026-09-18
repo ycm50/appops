@@ -1,0 +1,22 @@
+**/.gradle/
+**/.idea/
+
+**/build/
+
+**/.kotlin/
+
+/local.properties
+
+# 本地标记：存在时跳过 native/build_native.sh（POSIX 脚本 + git 子模块，Windows 上跑不了）。
+# 这是开发机专用开关，不入库；CI 会显式删除它以强制编译原生库。
+/SKIP_NATIVE
+
+/out/
+
+# Python 字节码缓存（tools/ 下的校验脚本会生成）
+__pycache__/
+*.pyc
+
+# 依赖预取缓存：./gradlew downloadDeps 把原始仓库的依赖下到这里，供 Gradle 当本地仓库用。
+# 只是本地缓存（体积不小），不入库；clone 后跑一次 downloadDeps 即可重建。
+/libs/maven-repo/

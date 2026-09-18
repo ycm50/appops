@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission
+    android:name="android.permission.QUERY_ALL_PACKAGES"
+    tools:ignore="QueryAllPackagesPermission" />
+  <uses-permission
+    android:name="android.permission.GET_APP_OPS_STATS"
+    tools:ignore="ProtectedPermissions" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+  <application
+    android:name=".fwk.AppM"
+    android:allowBackup="true"
+    android:icon="@mipmap/ic_launcher"
+    android:label="@string/app_name"
+    android:roundIcon="@mipmap/ic_launcher_round"
+    android:supportsRtl="true"
+    android:theme="@style/AppTheme"
+    tools:ignore="AllowBackup">
+
+    <activity
+      android:name=".fwk.MainActivityM"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+
+    <activity
+      android:name=".fwk.PackageActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.SettingsActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.AdvSettingsActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.FilterSettingsActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.PermViewActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.PermViewAppsActivityM"
+      android:parentActivityName=".fwk.PermViewActivityM" />
+
+    <activity
+      android:name=".fwk.AboutActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.HelpActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <activity
+      android:name=".fwk.CrashReportActivityM"
+      android:parentActivityName=".fwk.MainActivityM" />
+
+    <service
+      android:name=".fwk.LogcatSvcM"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="This service is explicitly started by the user. It may run up to maximum 5 minutes and collects logs in a text file while the user is interacting with the app which includes navigating between different screens and closing the app. User can tap the stop button on the notification anytime to stop the service." />
+    </service>
+
+    <service
+      android:name=".fwk.DaemonRcvSvcM"
+      android:exported="true"
+      android:foregroundServiceType="shortService"
+      tools:ignore="ExportedService" />
+
+    <service
+      android:name=".fwk.AdbConnectSvcM"
+      android:exported="true"
+      android:foregroundServiceType="specialUse"
+      tools:ignore="ExportedService">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="This service is explicitly started by the user through commandline to notify the app that ADB has been enabled." />
+    </service>
+
+    <!-- Receives the Shizuku binder. Only callable by Shizuku itself, which runs as shell or root
+         and therefore holds INTERACT_ACROSS_USERS_FULL. -->
+    <provider
+      android:name="rikka.shizuku.ShizukuProvider"
+      android:authorities="${applicationId}.shizuku"
+      android:enabled="true"
+      android:exported="true"
+      android:multiprocess="false"
+      android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+  </application>
+
+</manifest>

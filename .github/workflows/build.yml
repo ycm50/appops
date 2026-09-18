@@ -1,0 +1,163 @@
+# 在 GitHub 托管的 Linux runner 上编译 PMX (FOSS) 的 debug 与 release APK。
+#
+# 下面这几条都是这个仓库特有的坑，改 workflow 时别踩回去：
+#   * /local.properties 不入库（见 .gitignore），但 app/build.gradle 的 buildNative 任务在
+#     **配置阶段**就会读它的 sdk.dir，并据此推导 NDK 目录 —— 不生成它连配置都过不去。
+#   * app/src/main/jniLibs 被 app/.gitignore 忽略：libpmxe.so / libpmxd.so 是构建产物，
+#     所以 CI 必须真的编译原生库，不能指望仓库里有现成的。
+#   * native/libcap 是 git submodule，checkout 必须带 submodules: recursive。
+#   * 本地开发为了绕开 Windows 上跑不了 POSIX 脚本的问题会放一个 SKIP_NATIVE 标记，
+#     CI 里必须删掉，否则原生库静默不编译，APK 能出但运行期守护进程握手会失败。
+#   * 顶层 gradle.properties 里不要写 systemProp.*proxyHost：本地代理会让 runner 连不上仓库。
+#     如果本地确需代理，放到 ~/.gradle/gradle.properties（用户级，不入库）。
+#   * 仓库里不再用国内镜像：settings.gradle.kts 只声明官方原始仓库（google / mavenCentral /
+#     gradlePluginPortal / jitpack）。国内网络的加速靠本地开发时跑 ./gradlew downloadDeps 把依赖
+#     多线程下到 libs/maven-repo（见 buildSrc/src/main/kotlin/deps-download-conventions.gradle.kts）。
+#     CI 不跑 downloadDeps：runner 在海外，直接走原始仓库联网解析即可。
+
+name: Build
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上的新提交取消还没跑完的旧构建
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 与 buildSrc 约定插件里的 Java 17 对齐
+  JAVA_VERSION: '17'
+  # 下面两个版本必须和 app/build.gradle (NDK_VER) 与 gradle/libs.versions.toml 保持一致
+  ANDROID_COMPILE_SDK: '36'
+  ANDROID_NDK_VERSION: '28.2.13676358'
+
+jobs:
+  build:
+    name: Assemble APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout（含 native/libcap 子模块）
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: 安装 Android SDK / NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
+            build-tools;${{ env.ANDROID_COMPILE_SDK }}.0.0
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+
+      - name: 安装原生构建工具
+        # build_native.sh 用 NDK 自带的 clang 编译；libcap 生成 cap_names.h 时会探测 gperf，
+        # 装上它是为了让 libcap 走和上游一致的分支（没有 gperf 也能编，但分支不同）。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gperf
+
+      - name: 配置 Gradle（带依赖缓存）
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 生成 local.properties
+        run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+      - name: 确保执行真正的原生构建
+        run: |
+          rm -f SKIP_NATIVE
+          chmod +x gradlew native/build_native.sh
+
+      # 单独跑一次是为了让格式问题在日志里有清晰的失败点
+      # （spotlessCheck 本来也已经挂在 JavaCompile / KotlinCompile / preBuild 前面）
+      - name: 代码格式检查
+        run: ./gradlew spotlessCheck --stacktrace
+
+      - name: 编译 debug 与 release
+        run: ./gradlew :app:assembleDebug :app:assembleRelease --stacktrace
+
+      - name: 校验原生库确实打进了 APK
+        run: |
+          set -eu
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          [ -f "$apk" ] || { echo "::error::没有生成 $apk"; exit 1; }
+
+          fail=0
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            for lib in libpmxe.so libpmxd.so; do
+              if unzip -l "$apk" "lib/$abi/$lib" | grep -q "lib/$abi/$lib"; then
+                echo "ok    lib/$abi/$lib"
+              else
+                echo "::error::APK 中缺少 lib/$abi/$lib —— 原生构建没生效？"
+                fail=1
+              fi
+            done
+          done
+          exit $fail
+
+      - name: 校验 release APK 已签名
+        run: |
+          set -eu
+          apk=app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$apk" ]; then
+            echo "::error::没有生成 $apk —— release 应产出已签名的 app-release.apk；"
+            echo "::error::如果只看到 app-release-unsigned.apk，说明 app/build.gradle 里的 signingConfig 没生效"
+            exit 1
+          fi
+          "$ANDROID_SDK_ROOT/build-tools/${{ env.ANDROID_COMPILE_SDK }}.0.0/apksigner" verify --print-certs "$apk"
+
+      - name: 校验 release 里的 Shizuku 用户服务没有被 R8 剪掉
+        # release 开了 isMinifyEnabled / isShrinkResources。R8 看不到 Shizuku 会按类名反射实例化
+        # PmxUserService 并跨进程调用它，于是把整个实现裁掉（只剩一个同名空抽象类），
+        # user service 从此起不来，绑定必然超时 —— 表现为“无法获取 Shizuku 权限”，
+        # 而权限本身是授权过的。debug 不压缩，所以只有 release 会中招。
+        # 保活的规则在 app/proguard-rules.pro；这个脚本就是防止它再被静默改回去。
+        run: |
+          python3 tools/check_shizuku_user_service.py \
+            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: 写入构建摘要
+        if: always()
+        run: |
+          {
+            echo "## 构建产物"
+            echo
+            echo "| 文件 | 大小 |"
+            echo "| --- | --- |"
+            for f in app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk; do
+              [ -f "$f" ] || continue
+              echo "| \`$(basename "$f")\` | $(du -h "$f" | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传 APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmx-foss-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # release 的签名配置在 app/build.gradle 的 signingConfigs.release 里，
+      # 用的是仓库内的 keystore/pmx-release.p12（口令 123456，公开密钥，仅用于侧载升级）。
+      # 想换成私有密钥的话，把 keystore 换成从 secrets 解 base64 的那种做法即可。

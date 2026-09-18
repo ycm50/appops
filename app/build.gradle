@@ -1,0 +1,153 @@
+import java.nio.file.Paths
+
+apply plugin: 'apk-conventions'
+
+final NDK_VER = '28.2.13676358'
+
+android {
+    namespace = 'com.mirfatif.permissionmanagerx'
+
+    // 发布签名。密钥库和口令都在仓库里（口令就是 123456），目的只是给 FOSS 侧载包一个
+    // 稳定签名，保证后续版本能覆盖安装、不用先卸载。
+    // 密钥是公开的：任何人都能签出同签名的包，所以不要用它发到应用商店，
+    // 也不要把它当成发布者身份凭证。
+    signingConfigs {
+        release {
+            storeFile rootProject.file('keystore/pmx-release.p12')
+            storeType 'PKCS12'
+            storePassword '123456'
+            keyAlias 'pmx'
+            keyPassword '123456'
+        }
+    }
+
+    buildFeatures {
+        // For the Shizuku user service interface.
+        aidl = true
+    }
+
+    defaultConfig {
+        applicationId namespace
+
+        versionCode libs.versions.app.code.get().toInteger()
+        versionName libs.versions.app.name.get()
+
+        // Flavor-independent and BuildType-independent BuildConfig.APPLICATION_ID
+        buildConfigField 'String', 'APP_ID', '"' + namespace + '"'
+
+        versionNameSuffix '-foss'
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+
+        release {
+            postprocessing.obfuscate = false
+            signingConfig = signingConfigs.release
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            // Due to android:extractNativeLibs set to 'true' in AndroidManifest.
+            useLegacyPackaging = true
+        }
+
+        // Exclude large files.
+        resources.excludes.add('org/bouncycastle/pqc/crypto/picnic/lowmcL1.bin.properties')
+        resources.excludes.add('org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties')
+        resources.excludes.add('org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties')
+    }
+}
+
+configurations {
+    configureEach {
+        // To avoid duplicate class version conflict.
+        exclude group: 'androidx.lifecycle', module: 'lifecycle-viewmodel-ktx'
+    }
+}
+
+dependencies {
+    implementation project(path: ':priv_library')
+    runtimeOnly project(path: ':priv_daemon')
+
+    implementation libs.libadb.android
+    // To generate X509Certificate
+    implementation libs.sun.security.android
+    // For conscrypt
+    implementation libs.hiddenapibypass
+
+    // ADB-level privileges via Shizuku instead of pairing with wireless debugging
+    implementation libs.shizuku.api
+    implementation libs.shizuku.provider
+
+    implementation libs.androidx.appcompat
+    implementation libs.androidx.recyclerview
+    implementation libs.androidx.swiperefreshlayout
+    implementation libs.androidx.preference
+    implementation libs.androidx.browser
+    implementation libs.androidx.room.runtime
+    implementation libs.androidx.security.crypto
+    implementation libs.androidx.webkit
+    annotationProcessor libs.androidx.room.compiler
+
+    // For SnackBar and NavigationView. Also includes CoordinatorLayout
+    implementation libs.material
+
+    // To handle hyperlink onClick in TextView
+    implementation libs.better.link.movement.method
+
+    // To use Iterables for splitting Collections
+    implementation(libs.guava)
+
+    // Let's behave responsibly
+    debugImplementation libs.leakcanary.android
+}
+
+tasks.register('buildNative', Exec) {
+    def props = new Properties()
+    props.load(new FileInputStream(new File(rootDir, "local.properties")))
+    def ndkDir = new File(props.get("sdk.dir").toString(), "ndk/" + NDK_VER)
+
+    if (!ndkDir.exists()) {
+        throw new GradleException('NDK ' + NDK_VER + ' not installed')
+    }
+
+    environment 'ANDROID_NDK', ndkDir.absolutePath
+    workingDir rootDir.absolutePath + "/native"
+    commandLine './build_native.sh'
+
+    // build_native.sh is a POSIX shell script and native/libcap is a git submodule, so the native
+    // binaries cannot be produced on Windows / without the submodule. Create the SKIP_NATIVE marker
+    // file in the project root to skip this step; the Java/Kotlin/resource build is unaffected.
+    onlyIf { !new File(rootDir, 'SKIP_NATIVE').exists() }
+
+    doLast {
+        if (executionResult.get().exitValue != 0) {
+            throw new GradleException('buildNative failed')
+        }
+    }
+}
+
+afterEvaluate {
+    for (String build : new String[]{'Debug', 'Release'}) {
+        tasks.named('merge' + build + 'JniLibFolders').configure {
+            dependsOn('buildNative')
+            mustRunAfter('buildNative')
+        }
+    }
+}
+
+clean.doLast {
+    Paths.get(projectDir.absolutePath, 'src/main/jniLibs').deleteDir()
+}
+
+preBuild.doFirst {
+    // Re-merge the assets and jniLibs source sets.
+    for (String dir in new String[]{'assets', 'merged_jni_libs'}) {
+        Paths.get(projectDir.absolutePath, 'build/intermediates/' + dir).deleteDir()
+    }
+}

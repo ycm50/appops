@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!--
+    Human readable labels for permissions and AppOps, as "KEY=label" pairs.
+
+    The default (English) configuration intentionally leaves this empty so that the raw permission
+    name is shown unchanged; only values-zh-rCN/perm_names.xml provides a mapping.
+
+    Two kinds of keys are recognised, and a full-name match always wins:
+      * a complete permission / AppOp name, e.g. RECEIVE_BOOT_COMPLETED
+      * a single "_"-separated token, used to compose a name that has no full-name entry,
+        e.g. READ_CONTACTS -> READ + CONTACTS
+    A name is only composed from tokens when every one of its tokens is known, so an unmapped name
+    is shown as-is instead of turning into a half translated string.
+  -->
+  <string-array name="perm_name_map" />
+</resources>

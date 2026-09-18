@@ -1,0 +1,4 @@
+/build/
+/src/*/jniLibs/
+# 本地 assembleRelease 输出的副本（含 baselineProfile），构建产物不入库
+/release/

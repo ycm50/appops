@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.mirfatif.permissionmanagerx.fwk.MyLinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:orientation="vertical">
+
+  <View
+    style="@style/ListSeparator"
+    android:background="?attr/accentColor" />
+
+  <ToggleButton
+    android:id="@+id/exc_filters_master_switch"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="8dp"
+    android:layout_marginStart="12dp"
+    android:layout_marginEnd="12dp"
+    android:textOff="@string/enable_exc_filters"
+    android:textOn="@string/disable_exc_filters"
+    android:visibility="gone" />
+
+  <androidx.fragment.app.FragmentContainerView
+    android:id="@+id/fragment_container"
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1"/>
+
+</com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.mirfatif.permissionmanagerx.fwk.MyLinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:paddingTop="8dp"
+  android:paddingStart="24dp"
+  android:paddingEnd="24dp"
+  android:orientation="vertical">
+
+  <TextView
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:text="@string/choose_backup_restore"
+    android:textColor="@color/sharpText"
+    android:textSize="16sp" />
+
+  <View
+    style="@style/ListSeparatorDim"
+    android:layout_marginTop="12dp"
+    android:layout_marginBottom="8dp"
+    android:background="?attr/accentColor" />
+
+  <CheckBox
+    android:id="@+id/skip_uninstalled_packages"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginStart="-4dp"
+    android:text="@string/skip_uninstalled_packages"
+    android:textColor="@color/sharpText"
+    android:textSize="16sp" />
+
+  <CheckBox
+    android:id="@+id/swap_user_ids"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginStart="-4dp"
+    android:layout_marginTop="8dp"
+    android:text="@string/swap_user_ids"
+    android:textColor="@color/sharpText"
+    android:textSize="16sp"
+    android:visibility="gone" />
+
+  <com.mirfatif.permissionmanagerx.fwk.MyLinearLayout
+    android:id="@+id/user_ids_cont"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginVertical="8dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:visibility="gone">
+
+    <EditText
+      android:id="@+id/user_id_from"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_gravity="center_vertical"
+      android:layout_weight="1"
+      android:hint="@string/replace_user_id_from_hint"
+      android:inputType="number"
+      tools:ignore="Autofill,LabelFor" />
+
+    <TextView
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_gravity="center_vertical"
+      android:layout_marginHorizontal="4dp"
+      android:text="@string/replace_user_id_with"
+      android:textColor="@color/sharpText"
+      android:textSize="16sp" />
+
+    <EditText
+      android:id="@+id/user_id_to"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_gravity="center_vertical"
+      android:layout_weight="1"
+      android:hint="@string/replace_user_id_to_hint"
+      android:inputType="number"
+      tools:ignore="Autofill,LabelFor" />
+
+  </com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>
+
+</com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>

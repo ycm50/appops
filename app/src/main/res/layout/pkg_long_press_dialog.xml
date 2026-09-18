@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.mirfatif.permissionmanagerx.fwk.MyLinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:padding="8dp"
+  android:orientation="vertical">
+
+  <View
+    android:layout_width="20dp"
+    android:layout_height="6dp"
+    android:layout_gravity="center_horizontal"
+    android:background="@drawable/hinge" />
+
+  <com.mirfatif.permissionmanagerx.fwk.MyLinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="24dp"
+    android:orientation="vertical">
+
+    <TextView
+      android:id="@+id/pkg_label_v"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_gravity="center_horizontal"
+      android:ellipsize="marquee"
+      android:maxLines="1"
+      android:singleLine="true"
+      android:textAppearance="@style/TextAppearance.AppCompat.Title" />
+
+    <TextView
+      android:id="@+id/pkg_name_v"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_gravity="center_horizontal"
+      android:layout_marginTop="8dp"
+      android:ellipsize="marquee"
+      android:maxLines="1"
+      android:singleLine="true"
+      android:textAppearance="@style/TextAppearance.AppCompat.Medium"
+      android:visibility="gone" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/exclude_pkg"
+      style="@style/CustomButton"
+      android:layout_marginTop="32dp"
+      android:text="@string/exclude_app_from_visible_list" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/disable_pkg"
+      style="@style/CustomButton"
+      android:layout_marginTop="8dp" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/open_pkg_info"
+      style="@style/CustomButton"
+      android:layout_marginTop="8dp"
+      android:text="@string/open_pkg_info" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/find_pkg_proc"
+      style="@style/CustomButton"
+      android:layout_marginTop="8dp"
+      android:text="@string/find_pkg_process"
+      android:visibility="gone" />
+
+  </com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>
+</com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>

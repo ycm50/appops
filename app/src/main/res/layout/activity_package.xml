@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.mirfatif.permissionmanagerx.fwk.MyLinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:orientation="vertical">
+
+  <View
+    style="@style/ListSeparator"
+    android:background="?attr/accentColor" />
+
+  <com.mirfatif.permissionmanagerx.fwk.MyLinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1"
+    android:gravity="center"
+    android:orientation="vertical">
+
+    <TextView
+      android:id="@+id/no_perms_view"
+      android:visibility="gone"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:layout_margin="8dp"
+      android:textColor="@android:color/darker_gray"
+      android:textSize="20sp"
+      android:textStyle="italic" />
+
+    <com.mirfatif.permissionmanagerx.fwk.CustomButton
+      android:id="@+id/settings_button"
+      style="@style/CustomButton"
+      android:layout_width="wrap_content"
+      android:text="@string/filter_settings"
+      android:visibility="gone" />
+
+  </com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>
+
+  <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+    android:id="@+id/refresh_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.recyclerview.widget.RecyclerView
+      android:id="@+id/recycler_v"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:scrollbars="vertical" />
+
+  </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+</com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>

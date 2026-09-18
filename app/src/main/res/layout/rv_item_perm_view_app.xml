@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:app="http://schemas.android.com/apk/res-auto"
+  xmlns:tools="http://schemas.android.com/tools"
+  android:layout_width="match_parent"
+  android:layout_height="wrap_content"
+  android:orientation="horizontal">
+
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <ImageView
+      android:id="@+id/icon_v"
+      android:layout_width="48dp"
+      android:layout_height="48dp"
+      android:layout_gravity="center_vertical"
+      android:layout_marginStart="8dp"
+      android:layout_marginEnd="8dp"
+      tools:ignore="ContentDescription" />
+
+    <LinearLayout
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_weight="1"
+      android:orientation="vertical"
+      android:paddingVertical="8dp"
+      tools:ignore="NestedWeights">
+
+      <TextView
+        android:id="@+id/app_label_v"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="1dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textAlignment="viewStart"
+        android:textStyle="bold" />
+
+      <TextView
+        android:id="@+id/pkg_name_v"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="1dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textAlignment="viewStart" />
+
+      <com.mirfatif.permissionmanagerx.fwk.MyLinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="1dp">
+
+        <TextView
+          android:id="@+id/uid_label_v"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:text="@string/uid"
+          android:textAlignment="viewStart"
+          android:textSize="12sp" />
+
+        <TextView
+          android:id="@+id/uid_v"
+          android:layout_width="0dp"
+          android:layout_height="wrap_content"
+          android:layout_marginStart="4dp"
+          android:layout_weight="1"
+          android:ellipsize="end"
+          android:maxLines="1"
+          android:textAlignment="viewStart"
+          android:textSize="12sp" />
+
+      </com.mirfatif.permissionmanagerx.fwk.MyLinearLayout>
+
+    </LinearLayout>
+
+    <LinearLayout
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:gravity="end"
+      android:orientation="vertical"
+      android:padding="8dp">
+
+      <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/switch_v"
+        style="@android:style/Widget.Material.CompoundButton.Switch"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="8dp"
+        android:thumb="@drawable/slim_switch_thumb"
+        app:switchMinWidth="30dp"
+        app:track="@drawable/slim_switch_track" />
+
+      <TextView
+        android:id="@+id/app_op_mode_v"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:layout_marginTop="2dp"
+        android:textColor="?attr/accentColor"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    </LinearLayout>
+
+  </LinearLayout>
+
+</LinearLayout>
