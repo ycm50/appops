@@ -506,6 +506,14 @@ public enum MySettings {
             R.bool.pref_filter_exclude_framework_apps_default);
   }
 
+  /**
+   * Whether system apps are listed at all: this is the "Show system apps" setting in General
+   * settings, and it covers both the apps list and the Permission View.
+   */
+  public boolean showSystemApps() {
+    return getBoolPref(R.string.pref_show_system_apps_key, R.bool.pref_show_system_apps_default);
+  }
+
   public boolean excludeDisabledApps() {
     return getExcFiltersEnabled()
         && getBoolPref(
@@ -633,6 +641,7 @@ public enum MySettings {
 
   public static final int PREF_DRAWER_CHANGED = 0;
   public static final int PREF_UI_CHANGED = 1;
+  public static final int PREF_PERM_VIEW_CHANGED = 2;
 
   public final LiveEvent<Integer> mPrefsWatcher = new LiveEvent<>(true);
 
@@ -642,5 +651,10 @@ public enum MySettings {
 
   public void recreateMainActivity() {
     mPrefsWatcher.postValue(PREF_UI_CHANGED, true);
+  }
+
+  /** A Permission View setting changed: only its list needs rebuilding, not the whole UI. */
+  public void permViewPrefChanged() {
+    mPrefsWatcher.postValue(PREF_PERM_VIEW_CHANGED, true);
   }
 }

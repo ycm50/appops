@@ -22,6 +22,12 @@ public class LocaleUtils {
     return context;
   }
 
+  // Deprecated since API 25 in favour of createConfigurationContext(), which returns a new Context
+  // instead of mutating one. The app applies the locale by mutating the resources of the context it
+  // is given (see App.setLocale() and BaseActivity.attachBaseContext()), and the help screen
+  // re-applies it to its own base context at runtime, so moving to the configuration context model
+  // is a separate change. The deprecated call still works from minSdk 24 up.
+  @SuppressWarnings("deprecation")
   private static void updateConfiguration(Resources res, Configuration config, DisplayMetrics dm) {
     res.updateConfiguration(config, dm);
   }
@@ -41,7 +47,9 @@ public class LocaleUtils {
     if (TextUtils.isEmpty(lang)) {
       return Resources.getSystem().getConfiguration().getLocales().get(0);
     } else {
-      return new Locale(lang);
+      // The codes in arrays.xml are plain ISO language codes ("en", "zh", ...), for which
+      // forLanguageTag() is equivalent to the deprecated Locale(String) constructor.
+      return Locale.forLanguageTag(lang);
     }
   }
 

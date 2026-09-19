@@ -109,6 +109,10 @@
   <!-- CHAR LIMIT: 20 -->
   <string name="pref_settings_show_fwk_perm_name_title">框架权限名称</string>
   <string name="pref_settings_show_fwk_perm_name_summary">显示原始权限名称，而不是好看的名字</string>
+  <!-- Apps list and Permission View -->
+  <!-- CHAR LIMIT: 20 -->
+  <string name="pref_show_system_apps_title">显示系统应用</string>
+  <string name="pref_show_system_apps_summary">在应用列表与权限视图中显示系统应用（过滤器中的“排除系统应用”同样生效）</string>
   <!-- CHAR LIMIT: 20 -->
   <string name="pref_settings_special_search_title">综合搜索</string>
   <string name="pref_settings_special_search_summary">使用 AND (&amp;), OR (|) 和 nt (!) 操作员搜索合并查询</string>

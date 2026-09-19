@@ -19,6 +19,7 @@ import com.mirfatif.permissionmanagerx.privs.DaemonHandler;
 import com.mirfatif.permissionmanagerx.privs.NativeDaemon;
 import com.mirfatif.privtasks.util.LogUtil;
 import com.mirfatif.privtasks.util.MyLog;
+import com.mirfatif.privtasks.util.Util;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileWriter;
@@ -145,29 +146,16 @@ public class LogUtils {
 
   // apksigner verify --print-certs app-release.apk
   public static boolean isOfficialRelease() {
-    int flags =
-        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-            ? PackageManager.GET_SIGNING_CERTIFICATES
-            : PackageManager.GET_SIGNATURES;
     PackageInfo info;
     try {
-      info = App.getPm().getPackageInfo(App.getCxt().getPackageName(), flags);
+      info = App.getPm().getPackageInfo(App.getCxt().getPackageName(), Util.PM_GET_SIGNATURES);
     } catch (PackageManager.NameNotFoundException e) {
       MyLog.e(TAG, "isOfficialRelease", e);
       return false;
     }
 
-    Signature[] signatures;
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-      if (info.signingInfo != null) {
-        signatures = info.signingInfo.getApkContentsSigners();
-      } else {
-        MyLog.e(TAG, "isOfficialRelease", "App signingInfo not found");
-        return false;
-      }
-    } else {
-      signatures = info.signatures;
-    }
+    // Util hides away the API 28+ signingInfo / legacy signatures switch.
+    Signature[] signatures = Util.getPackageSignatures(info);
 
     if (signatures == null || signatures.length == 0) {
       MyLog.e(TAG, "isOfficialRelease", "APK signatures not found");

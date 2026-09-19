@@ -59,12 +59,18 @@ public class Util {
 
   public static final int PM_GET_SIGNATURES = buildPmSignFlag();
 
+  // GET_SIGNATURES and PackageInfo.signatures are deprecated since API 28 in favour of
+  // GET_SIGNING_CERTIFICATES and PackageInfo.signingInfo, but minSdk is 24, so the old API is still
+  // needed on Android 7.0 - 8.1. These two methods are the only place in the project which reads
+  // them; everything else goes through them.
+  @SuppressWarnings("deprecation")
   private static int buildPmSignFlag() {
     return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
         ? PackageManager.GET_SIGNING_CERTIFICATES
         : PackageManager.GET_SIGNATURES;
   }
 
+  @SuppressWarnings("deprecation")
   public static Signature[] getPackageSignatures(PackageInfo pkgInfo) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       return pkgInfo.signingInfo == null

@@ -253,6 +253,13 @@
   <string name="pref_settings_show_fwk_perm_name_key" translatable="false">pref_settings_show_fwk_perm_name</string>
   <bool name="pref_settings_show_fwk_perm_name_default">true</bool>
 
+  <!-- Apps list and Permission View -->
+  <!-- CHAR LIMIT: 20 -->
+  <string name="pref_show_system_apps_title">Show system apps</string>
+  <string name="pref_show_system_apps_summary">Show system apps in the apps list and Permission View</string>
+  <string name="pref_show_system_apps_key" translatable="false">pref_show_system_apps</string>
+  <bool name="pref_show_system_apps_default">true</bool>
+
   <string name="pref_settings_special_search_key" translatable="false">pref_settings_special_search</string>
   <bool name="pref_settings_special_search_default">true</bool>
   <!-- CHAR LIMIT: 20 -->

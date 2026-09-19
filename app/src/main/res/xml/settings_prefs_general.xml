@@ -42,6 +42,16 @@
 
   <PreferenceCategory />
 
+  <SwitchPreferenceCompat
+    app:defaultValue="@bool/pref_show_system_apps_default"
+    app:icon="@drawable/permission"
+    app:key="@string/pref_show_system_apps_key"
+    app:singleLineTitle="false"
+    app:summary="@string/pref_show_system_apps_summary"
+    app:title="@string/pref_show_system_apps_title" />
+
+  <PreferenceCategory />
+
   <ListPreference
     app:defaultValue="@string/pref_settings_locale_default"
     app:entries="@array/locales"

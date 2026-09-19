@@ -30,7 +30,7 @@ public class PermViewAppsActivityM extends BaseActivity {
   }
 
   public boolean onOptionsItemSelected(MenuItem item) {
-    return super.onOptionsItemSelected(item);
+    return mA.onOptionsItemSelected(item) || super.onOptionsItemSelected(item);
   }
 
   public AlertDialog createDialog(String tag, AlertDialogFragment dialogFragment) {

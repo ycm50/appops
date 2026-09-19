@@ -52,6 +52,11 @@ class PrivDaemon {
     throw new RuntimeException("Main thread loop unexpectedly exited");
   }
 
+  // The deprecation assumes the Android environment creates the main looper for you. The daemon is
+  // started through app_process, where nothing does, and ThreadUtils.isMainThread() (priv_library)
+  // reads Looper.getMainLooper(): Looper.prepare() would leave that null and silently change the
+  // answer. So the daemon keeps marking its own thread as the main one.
+  @SuppressWarnings("deprecation")
   private static void prepareMainLooper() {
     Looper.prepareMainLooper();
   }

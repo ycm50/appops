@@ -144,7 +144,7 @@ public class PermViewActivity {
   }
 
   private void onPrefChanged(Integer pref) {
-    if (pref == MySettings.PREF_UI_CHANGED) {
+    if (pref == MySettings.PREF_UI_CHANGED || pref == MySettings.PREF_PERM_VIEW_CHANGED) {
       build();
     }
   }

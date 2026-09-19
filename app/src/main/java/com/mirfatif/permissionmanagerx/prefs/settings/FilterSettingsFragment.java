@@ -117,8 +117,6 @@ public class FilterSettingsFragment extends PreferenceFragmentCompat
     extraAppOpsListView = findPreference(getString(R.string.pref_filter_extra_appops_key));
 
     updateViews();
-
-    setHasOptionsMenu(true);
   }
 
   private void updateViews() {

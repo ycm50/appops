@@ -58,6 +58,11 @@ public class SettingsFragGeneral extends PreferenceFragmentCompat
       mA.recreate();
       MySettings.INS.recreateMainActivity();
       PackageParser.INS.updatePkgList();
+    } else if (key.equals(ApiUtils.getString(R.string.pref_show_system_apps_key))) {
+      // The apps list is filtered while the package list is built (see PackageParser), and the
+      // Permission View aggregates that same list, so rebuilding it updates both.
+      PackageParser.INS.updatePkgList();
+      MySettings.INS.permViewPrefChanged();
     }
   }
 }

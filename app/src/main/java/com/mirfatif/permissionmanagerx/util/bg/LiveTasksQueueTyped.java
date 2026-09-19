@@ -35,6 +35,10 @@ public class LiveTasksQueueTyped<T> extends LiveTasksQueue {
 
   private volatile T mResult;
 
+  // The parent queue stores tasks as Objects, and a task's result type cannot be expressed there
+  // (the type parameter belongs to the queue). Every cast below is guarded by the instanceof check
+  // on the task itself, which is the only thing that can be checked at runtime.
+  @SuppressWarnings("unchecked")
   protected void run(Object task) {
     T result = mResult;
 

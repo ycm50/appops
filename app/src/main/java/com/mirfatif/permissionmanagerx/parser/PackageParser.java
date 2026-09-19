@@ -153,10 +153,19 @@ public enum PackageParser {
     return mPkgUpdater.hasRunningOrPendingTasks();
   }
 
+  /**
+   * The system apps filter state the cached {@link #mPkgInfoList} was built with, so that flipping
+   * the "Show system apps" setting (or the exclusion filter) rebuilds it instead of reusing a list
+   * which no longer matches.
+   */
+  private Boolean mPkgInfoListExcludeSystem;
+
   private List<PackageInfo> buildPkgInfoList() {
+    boolean excludeSystem = isSystemAppsExcluded();
+
     List<PackageInfo> pkgInfoList = new ArrayList<>(mPkgInfoList);
 
-    if (!pkgInfoList.isEmpty()) {
+    if (!pkgInfoList.isEmpty() && Objects.equals(mPkgInfoListExcludeSystem, excludeSystem)) {
       return pkgInfoList;
     }
 
@@ -166,17 +175,25 @@ public enum PackageParser {
     pkgInfoList.addAll(
         ApiUtils.getInstalledPackages(PackageManager.GET_PERMISSIONS | PM_GET_SIGNATURES));
 
+    // Drop what is not going to be listed before loading labels below: loadLabel is an IPC to
+    // system_server, and there are usually several hundreds of system apps. Their permissions are
+    // not parsed either, and the progress shown is proportional to the real work.
+    pkgInfoList.removeIf(pkgInfo -> pkgInfo == null || pkgInfo.applicationInfo == null);
+    if (excludeSystem) {
+      pkgInfoList.removeIf(this::isSystemApp);
+    }
+
     setProgress(SORT_LIST, true, false);
     pkgInfoList.sort(
         Comparator.comparing(
             pkgInfo -> pkgInfo.applicationInfo.loadLabel(mPm).toString().toUpperCase()));
 
-    pkgInfoList.removeIf(Objects::isNull);
-
     synchronized (mPkgInfoList) {
       mPkgInfoList.clear();
       mPkgInfoList.addAll(pkgInfoList);
     }
+
+    mPkgInfoListExcludeSystem = excludeSystem;
 
     return pkgInfoList;
   }
@@ -199,6 +216,7 @@ public enum PackageParser {
   public void clearPkgInfoList() {
     synchronized (mPkgInfoList) {
       mPkgInfoList.clear();
+      mPkgInfoListExcludeSystem = null;
     }
   }
 
@@ -478,8 +496,18 @@ public enum PackageParser {
     return ExcFiltersData.INS.isPkgExcluded(pkgName);
   }
 
+  /**
+   * Whether system apps must not be listed at all. Two switches can cause that: the exclusion
+   * filter (which belongs to the filters group and is off until the filters master switch is on),
+   * and the "Show system apps" setting in General settings. Hiding wins over showing: an explicit
+   * exclusion filter is not silently overridden by the switch.
+   */
+  private boolean isSystemAppsExcluded() {
+    return MySettings.INS.excludeSystemApps() || !MySettings.INS.showSystemApps();
+  }
+
   private boolean isFilteredOutSystemPkg(boolean isSystemPkg) {
-    return MySettings.INS.excludeSystemApps() && isSystemPkg;
+    return isSystemPkg && isSystemAppsExcluded();
   }
 
   private boolean isFilteredOutFrameworkPkg(boolean isFrameworkPkg) {
@@ -884,10 +912,36 @@ public enum PackageParser {
     }
   }
 
-  public static final int PI_PROTECTION_MASK_BASE = PermissionInfo.PROTECTION_MASK_BASE;
+  // Legacy "signatureOrSystem" protection level. PermissionInfo#PROTECTION_SIGNATURE_OR_SYSTEM is
+  // deprecated since API 23: from then on the framework encodes it as PROTECTION_SIGNATURE together
+  // with PROTECTION_FLAG_PRIVILEGED, which the branch below already handles. Permissions declared
+  // against older platforms can still report the old value.
+  private static final int LEGACY_PROTECTION_SIGNATURE_OR_SYSTEM = 3;
 
+  // PermissionInfo#getProtection() and getProtectionFlags() need API 28, minSdk is 24, so on older
+  // releases the deprecated protectionLevel field is read instead of them. The two masks below
+  // partition the field, so the result is exactly the same as reading it and splitting it by hand.
+  @SuppressWarnings("deprecation")
+  public static int getProtection(PermissionInfo permInfo) {
+    if (VERSION.SDK_INT >= VERSION_CODES.P) {
+      return permInfo.getProtection();
+    }
+    return permInfo.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE;
+  }
+
+  // Additional protection flags, e.g. PermissionInfo#PROTECTION_FLAG_PRIVILEGED, base level masked
+  // out.
+  @SuppressWarnings("deprecation")
+  public static int getProtectionFlags(PermissionInfo permInfo) {
+    if (VERSION.SDK_INT >= VERSION_CODES.P) {
+      return permInfo.getProtectionFlags();
+    }
+    return permInfo.protectionLevel & ~PermissionInfo.PROTECTION_MASK_BASE;
+  }
+
+  // The raw protection level: the base level together with the additional flags.
   public static int getProtectionLevel(PermissionInfo permInfo) {
-    return permInfo.protectionLevel;
+    return getProtection(permInfo) | getProtectionFlags(permInfo);
   }
 
   private final Map<String, ManifestPermFlags> mManifestFlags = new HashMap<>();
@@ -910,9 +964,8 @@ public enum PackageParser {
   public static ManifestPermFlags getManifestPermFlags(PermissionInfo permInfo) {
     ManifestPermFlags flags = new ManifestPermFlags();
 
-    int protectionLevel = getProtectionLevel(permInfo) & PI_PROTECTION_MASK_BASE;
-    int protectionFlags = getProtectionLevel(permInfo) & ~PI_PROTECTION_MASK_BASE;
-    int PROTECTION_SIGNATURE_OR_SYSTEM = PermissionInfo.PROTECTION_SIGNATURE_OR_SYSTEM;
+    int protectionLevel = getProtection(permInfo);
+    int protectionFlags = getProtectionFlags(permInfo);
 
     if (protectionLevel == PermissionInfo.PROTECTION_NORMAL) {
       flags.protection = Permission.PROTECTION_NORMAL;
@@ -920,7 +973,7 @@ public enum PackageParser {
       flags.protection = Permission.PROTECTION_DANGEROUS;
     } else if (protectionLevel == PermissionInfo.PROTECTION_SIGNATURE) {
       flags.protection = Permission.PROTECTION_SIGNATURE;
-    } else if (protectionLevel == PROTECTION_SIGNATURE_OR_SYSTEM) {
+    } else if (protectionLevel == LEGACY_PROTECTION_SIGNATURE_OR_SYSTEM) {
       flags.protection = Permission.PROTECTION_SIGNATURE;
     } else if (VERSION.SDK_INT >= VERSION_CODES.S && protectionLevel == PROTECTION_INTERNAL) {
       flags.protection = Permission.PROTECTION_INTERNAL;

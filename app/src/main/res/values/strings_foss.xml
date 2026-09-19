@@ -671,6 +671,14 @@
   <string name="perm_view_app_op_label">AppOp</string>
   <string name="perm_view_no_perms">No permissions to show. Check your exclusion filters.</string>
   <string name="perm_view_no_apps">No apps using this permission</string>
+  <!-- CHAR LIMIT: 20 -->
+  <string name="perm_view_enable_all">Enable all</string>
+  <!-- CHAR LIMIT: 20 -->
+  <string name="perm_view_disable_all">Disable all</string>
+  <string name="perm_view_bulk_enable_msg">Enable this permission for %1$d apps?</string>
+  <string name="perm_view_bulk_disable_msg">Disable this permission for %1$d apps?</string>
+  <string name="perm_view_bulk_changed_toast">Changed apps: %1$d</string>
+  <string name="perm_view_bulk_nothing_to_do_toast">Nothing to change</string>
 
   <!-- Shizuku -->
   <string name="crowdin_comment_break_strings_30" translatable="false">Crowdin comment break</string>

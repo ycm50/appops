@@ -496,6 +496,14 @@
   <string name="perm_view_app_op_label">AppOp</string>
   <string name="perm_view_no_perms">没有可显示的权限。请检查排除过滤器。</string>
   <string name="perm_view_no_apps">没有应用使用此权限</string>
+  <!-- CHAR LIMIT: 20 -->
+  <string name="perm_view_enable_all">全部开启</string>
+  <!-- CHAR LIMIT: 20 -->
+  <string name="perm_view_disable_all">全部关闭</string>
+  <string name="perm_view_bulk_enable_msg">为 %1$d 个应用开启此权限？</string>
+  <string name="perm_view_bulk_disable_msg">为 %1$d 个应用关闭此权限？</string>
+  <string name="perm_view_bulk_changed_toast">已修改 %1$d 个应用</string>
+  <string name="perm_view_bulk_nothing_to_do_toast">没有需要修改的应用</string>
 
   <!-- Shizuku -->
   <string name="connected_to_shizuku_toast">已连接 Shizuku</string>

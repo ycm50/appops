@@ -147,6 +147,11 @@ public class ApiUtils {
     }
   }
 
+  // androidx.preference's PreferenceDialogFragmentCompat resolves the preference through
+  // getTargetFragment() - androidx.preference 1.2.1 still does, and throws unless the target
+  // fragment implements DialogPreference.TargetFragment. The Fragment Result API cannot replace it
+  // without replacing the preference dialogs themselves.
+  @SuppressWarnings("deprecation")
   public static void setTargetFragment(Fragment source, Fragment target) {
     source.setTargetFragment(target, 0);
   }

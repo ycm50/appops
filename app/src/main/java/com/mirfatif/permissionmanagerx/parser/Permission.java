@@ -377,9 +377,14 @@ public class Permission {
   }
 
   public void toggleState(Package pkg) {
+    setPermState(pkg, !isGranted());
+  }
+
+  /** Sets the manifest permission state to {@code granted} instead of toggling it. */
+  public void setPermState(Package pkg, boolean granted) {
     if (!isAppOp()) {
       DaemonIface.INS.setPermState(
-          !isGranted(), pkg.getName(), getName(), UserUtils.getUserId(pkg.getUid()));
+          granted, pkg.getName(), getName(), UserUtils.getUserId(pkg.getUid()));
     }
   }
 
