@@ -1,5 +1,6 @@
 package com.mirfatif.permissionmanagerx.permview;
 
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
@@ -15,6 +16,7 @@ import com.mirfatif.permissionmanagerx.databinding.RvItemPermViewAppBinding;
 import com.mirfatif.permissionmanagerx.parser.PermViewParser.PermApp;
 import com.mirfatif.permissionmanagerx.permview.PermViewAppsAdapter.ItemViewHolder;
 import com.mirfatif.permissionmanagerx.util.ApiUtils;
+import com.mirfatif.permissionmanagerx.util.PkgIconCache;
 import com.mirfatif.permissionmanagerx.util.bg.LiveSingleParamTask;
 import com.mirfatif.permissionmanagerx.util.bg.UiRunner;
 
@@ -103,14 +105,45 @@ public class PermViewAppsAdapter extends MyListAdapter<PermApp, ItemViewHolder> 
     }
 
     private void setIcon(PermApp app) {
+      if (Thread.currentThread().isInterrupted()) {
+        return;
+      }
+
       try {
         int flags = PackageManager.MATCH_UNINSTALLED_PACKAGES;
+        // Passing lastUpdateTime lets the cache hit by exact key: on a rebind of an unchanged
+        // package it returns without invoking the loader, i.e. without any PackageManager IPC.
         Drawable icon =
-            App.getPm().getApplicationIcon(ApiUtils.getAppInfo(app.getPkgName(), flags));
-        if (!Thread.interrupted()) {
-          UiRunner.post(mLifecycleOwner, () -> mB.iconV.setImageDrawable(icon));
+            PkgIconCache.getOrLoad(
+                app.getPkgName(),
+                app.getUid(),
+                app.pkg.getLastUpdateTime(),
+                () -> {
+                  PackageInfo info = ApiUtils.getPkgInfo(app.getPkgName(), flags);
+                  return new PkgIconCache.LoadedIcon(
+                      App.getPm().getApplicationIcon(info.applicationInfo), info.lastUpdateTime);
+                });
+
+        // A null icon is kept as the placeholder; setting it is not required and must not throw.
+        if (icon == null || Thread.interrupted()) {
+          return;
         }
-      } catch (PackageManager.NameNotFoundException ignored) {
+
+        UiRunner.post(
+            mLifecycleOwner,
+            () -> {
+              // The holder may have been rebound while the icon was loading.
+              int pos = getBindingAdapterPosition();
+              PermApp bound = pos == RecyclerView.NO_POSITION ? null : getItem(pos);
+              if (bound != null
+                  && bound.getPkgName().equals(app.getPkgName())
+                  && bound.getUid() == app.getUid()) {
+                mB.iconV.setImageDrawable(icon);
+              }
+            });
+      } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
+        // A missing package or a bad drawable must not reach the default uncaught exception
+        // handler from a list bind: the row keeps its placeholder icon instead.
       }
     }
   }

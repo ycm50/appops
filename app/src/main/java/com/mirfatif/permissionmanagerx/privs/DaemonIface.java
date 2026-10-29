@@ -8,12 +8,14 @@ import com.mirfatif.permissionmanagerx.prefs.MySettings;
 import com.mirfatif.permissionmanagerx.util.UiUtils;
 import com.mirfatif.privtasks.bind.AppOpsLists;
 import com.mirfatif.privtasks.bind.MyPackageOps;
+import com.mirfatif.privtasks.bind.MyPkgOpsBatch;
 import com.mirfatif.privtasks.bind.PermFixedFlags;
 import com.mirfatif.privtasks.bind.PrivsStatus;
 import com.mirfatif.privtasks.iface.IPrivTasks;
 import com.mirfatif.privtasks.util.MyLog;
 import com.mirfatif.privtasks.util.bg.RateLimitedTask;
 import com.mirfatif.privtasks.util.bg.ThreadUtils;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -202,6 +204,51 @@ public enum DaemonIface {
     return null;
   }
 
+  /**
+   * Batched {@link #getOpsForPkg}: one IPC for many packages, cutting round trips and holding
+   * {@code synchronized (this)} for less time.
+   */
+  public List<MyPkgOpsBatch> getOpsForPkgs(int[] uids, String[] pkgNames, int[] ops) {
+    ThreadUtils.assertNotMainThread();
+
+    // Unlike the two arrays, a null ops array is a valid request: it means "every op of the
+    // package", exactly like getOpsForPkg(uid, pkgName, null). Rejecting it here would silently
+    // push every caller onto the one-by-one path.
+    if (uids == null || pkgNames == null) {
+      MyLog.e(TAG, "getOpsForPkgs", "Null arguments");
+      return null;
+    }
+
+    if (uids.length != pkgNames.length) {
+      MyLog.e(TAG, "getOpsForPkgs", "Mismatched argument counts");
+      return null;
+    }
+
+    // An empty request is valid and needs no IPC; the interface treats it as zero items.
+    if (uids.length == 0) {
+      return new ArrayList<>();
+    }
+
+    synchronized (this) {
+      if (isDaemonAlive()) {
+        try {
+          List<MyPkgOpsBatch> batch = mPrivTasks.getOpsForPackages(uids, pkgNames, ops);
+          // An empty reply means the running daemon does not know this transaction (old daemon).
+          if (batch == null || batch.isEmpty()) {
+            MyLog.e(TAG, "getOpsForPkgs", "Daemon returned no batch result");
+            return null;
+          }
+          return batch;
+        } catch (RemoteException e) {
+          MyLog.e(TAG, "getOpsForPkgs", e);
+          mGetOpsForPkgToaster.run();
+        }
+      }
+    }
+
+    return null;
+  }
+
   private final RateLimitedTask mGetPermFlagsToaster =
       new RateLimitedTask(
           10,
@@ -217,6 +264,48 @@ public enum DaemonIface {
           return mPrivTasks.getPermFlags(permName, pkgName, userId);
         } catch (RemoteException e) {
           MyLog.e(TAG, "getPermFlags", e);
+          mGetPermFlagsToaster.run();
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Batched {@link #getPermFlags}: one IPC for many perm/pkg/user triples, cutting round trips and
+   * holding {@code synchronized (this)} for less time.
+   */
+  public int[] getPermFlagsBatch(String[] permNames, String[] pkgNames, int[] userIds) {
+    ThreadUtils.assertNotMainThread();
+
+    if (permNames == null || pkgNames == null || userIds == null) {
+      MyLog.e(TAG, "getPermFlagsBatch", "Null arguments");
+      return null;
+    }
+
+    // An empty request is valid and needs no IPC; the interface treats it as zero items.
+    if (permNames.length == 0) {
+      return new int[0];
+    }
+
+    if (permNames.length != pkgNames.length || permNames.length != userIds.length) {
+      MyLog.e(TAG, "getPermFlagsBatch", "Mismatched argument counts");
+      return null;
+    }
+
+    synchronized (this) {
+      if (isDaemonAlive()) {
+        try {
+          int[] flags = mPrivTasks.getPermFlagsBatch(permNames, pkgNames, userIds);
+          // An empty reply means the running daemon does not know this transaction (old daemon).
+          if (flags == null || flags.length == 0) {
+            MyLog.e(TAG, "getPermFlagsBatch", "Daemon returned no batch result");
+            return null;
+          }
+          return flags;
+        } catch (RemoteException e) {
+          MyLog.e(TAG, "getPermFlagsBatch", e);
           mGetPermFlagsToaster.run();
         }
       }

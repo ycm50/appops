@@ -1,5 +1,6 @@
 package com.mirfatif.permissionmanagerx.parser;
 
+import android.os.Build;
 import android.os.RemoteException;
 import android.util.ArrayMap;
 import com.mirfatif.permissionmanagerx.app.App;
@@ -13,6 +14,7 @@ import com.mirfatif.permissionmanagerx.util.ApiUtils;
 import com.mirfatif.privtasks.AppPrivTasks;
 import com.mirfatif.privtasks.bind.AppOpsLists;
 import com.mirfatif.privtasks.bind.MyPackageOps;
+import com.mirfatif.privtasks.bind.MyPkgOpsBatch;
 import com.mirfatif.privtasks.util.CloseableReadWriteLock;
 import com.mirfatif.privtasks.util.MyLog;
 import com.mirfatif.privtasks.util.bg.BgRunner;
@@ -47,6 +49,63 @@ public enum AppOpsParser {
 
   List<MyPackageOps> getUidOps(int uid) {
     return getOpsForPackage(uid, null, null);
+  }
+
+  /**
+   * Batched variant of {@link #getOpsForPackage}: fetches the AppOps of many packages at once.
+   *
+   * <p>Each package normally costs two app-to-daemon round trips (package ops plus uid ops on API
+   * 26+), and every {@link DaemonIface} call is serialized under {@code synchronized (this)}, so
+   * batching them into one transaction cuts the round trips and shortens lock contention. The
+   * daemon still calls {@code IAppOpsService} once per package internally, so the per-package
+   * interface is kept.
+   *
+   * <p>Returns null when the batch could not be obtained (null or mismatched arguments, daemon not
+   * connected, old daemon without the batch transaction, or a failure); callers must fall back.
+   * Without a daemon, the returned batches may hold null ops lists for packages that failed.
+   */
+  List<MyPkgOpsBatch> getOpsForPkgs(int[] uids, String[] pkgNames, int[] ops) {
+    if (uids == null || pkgNames == null || uids.length != pkgNames.length) {
+      MyLog.e(TAG, "getOpsForPkgs", "Invalid arguments");
+      return null;
+    }
+
+    // An empty request has nothing to fetch; the daemon answers empty batches too, but skipping
+    // it here saves a round trip.
+    if (uids.length == 0) {
+      return new ArrayList<>();
+    }
+
+    if (DaemonHandler.INS.isDaemonAlive()) {
+      return DaemonIface.INS.getOpsForPkgs(uids, pkgNames, ops);
+    }
+
+    if (canReadAppOpsNoDaemon()) {
+      List<MyPkgOpsBatch> batches = new ArrayList<>(pkgNames.length);
+      for (int i = 0; i < pkgNames.length; i++) {
+        List<MyPackageOps> pkgOps = null;
+        List<MyPackageOps> uidOps = null;
+        try {
+          pkgOps = mAppPrivTasks.getOpsForPkg(uids[i], pkgNames[i], ops);
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            uidOps = mAppPrivTasks.getOpsForPkg(uids[i], null, ops);
+          }
+        } catch (RemoteException | RuntimeException e) {
+          // Keep null (not an empty list) so that callers can tell "failed" from "no ops". A
+          // RuntimeException is caught too: the hidden-API layer reports a broken framework call
+          // that way, and one bad package must not abort the whole batch. It is only logged, not
+          // passed to handleException(): that marks the in-process AppOps path as broken for the
+          // whole run, and a single odd package must not disable it for every other package.
+          MyLog.e(TAG, "getOpsForPkgs", e);
+          pkgOps = null;
+          uidOps = null;
+        }
+        batches.add(new MyPkgOpsBatch(pkgNames[i], pkgOps, uidOps));
+      }
+      return batches;
+    }
+
+    return new ArrayList<>();
   }
 
   private final List<String> mAppOpsNames = Collections.synchronizedList(new ArrayList<>());

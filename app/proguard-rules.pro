@@ -32,5 +32,25 @@
 -keep interface com.mirfatif.permissionmanagerx.privs.IPmxUserService { *; }
 -keep class com.mirfatif.permissionmanagerx.privs.IPmxUserService$Stub { *; }
 
+# Privileged daemon IPC payloads (com.mirfatif.privtasks.bind).
+#
+# The app and the daemon exchange these Parcelables over the hand-written IPrivTasks Binder
+# protocol. Every current read is a static CREATOR reference (createTypedArrayList /
+# readTypedObject), so R8 can see them; keeping the package keeps the wire format independent of
+# that reachability analysis. These objects are built on one side of a process boundary and
+# consumed on the other, where a member R8 dropped only shows up as a runtime Parcel error.
+#
+# CREATOR needs no rule of its own: the default proguard-android-optimize.txt that apk-conventions
+# puts on the release build type already includes proguard-common.txt, which keeps
+# `public static final ** CREATOR` in every Parcelable. Class names need no -keepnames either:
+# typed lists and readTypedObject never write a class name into the Parcel, and release builds
+# disable obfuscation (postprocessing.obfuscate = false in app/build.gradle).
+#
+# IPrivTasks itself, including Stub and Proxy, is not kept on purpose: both ends instantiate and
+# call it from code R8 can see, and onTransact is a virtual override of Binder, so it survives
+# shrinking on its own. Only classes loaded by name need a rule: PmxUserService above and
+# com.mirfatif.privdaemon.Main in priv_daemon/daemon-proguard-rules.pro.
+-keep class com.mirfatif.privtasks.bind.** { *; }
+
 -dontwarn io.github.muntashirakon.adb.AdbProtocol$AuthType
 -dontwarn jakarta.annotation.Nullable

@@ -10,6 +10,7 @@ import android.os.RemoteException;
 import com.mirfatif.err.HiddenAPIsException;
 import com.mirfatif.privtasks.bind.AppOpsLists;
 import com.mirfatif.privtasks.bind.MyPackageOps;
+import com.mirfatif.privtasks.bind.MyPkgOpsBatch;
 import com.mirfatif.privtasks.bind.PrivsStatus;
 import com.mirfatif.privtasks.bind.StrIntMap;
 import com.mirfatif.privtasks.hiddenapis.HiddenAPIs;
@@ -304,6 +305,73 @@ public class AppPrivTasks {
         throw new HiddenAPIsException(e);
       }
     }
+  }
+
+  // Batched variant of getOpsForPkg(). Used by the daemon for the batch IPC and, without a
+  // daemon, by the app itself. One MyPkgOpsBatch is returned per requested package, in the
+  // same order. An empty request yields an empty list.
+  public List<MyPkgOpsBatch> getOpsForPackages(int[] uids, String[] pkgNames, int[] ops)
+      throws RemoteException {
+    // A null ops array means "every op of the package", like getOpsForPkg(uid, pkgName, null).
+    if (uids == null || pkgNames == null) {
+      throw new IllegalArgumentException("Null array");
+    }
+    if (uids.length != pkgNames.length) {
+      throw new IllegalArgumentException("uids and pkgNames length mismatch");
+    }
+
+    List<MyPkgOpsBatch> batches = new ArrayList<>(pkgNames.length);
+
+    for (int i = 0; i < pkgNames.length; i++) {
+      // The framework API takes one package at a time; batching only saves IPC round trips.
+      // Keep null on failure: an empty list would mean "this package has no ops".
+      List<MyPackageOps> pkgOps = null;
+      List<MyPackageOps> uidOps = null;
+      try {
+        pkgOps = getOpsForPkg(uids[i], pkgNames[i], ops);
+        // getUidOps() exists since O only.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          uidOps = getOpsForPkg(uids[i], null, ops);
+        }
+      } catch (RemoteException | RuntimeException | NoSuchMethodError e) {
+        // One bad package must not take the whole batch down; it keeps its slot with null lists.
+        pkgOps = null;
+        uidOps = null;
+      }
+
+      batches.add(new MyPkgOpsBatch(pkgNames[i], pkgOps, uidOps));
+    }
+
+    return batches;
+  }
+
+  private final RateLimiter mPermFlagsBatchErrLogLimiter = new RateLimiter(1, TimeUnit.SECONDS);
+
+  // Batched variant of getPermFlags(). The result has the same length as the request; a failed
+  // item is set to -1, and does not fail the whole batch. An empty request yields an empty array.
+  public int[] getPermFlagsBatch(String[] permNames, String[] pkgNames, int[] userIds)
+      throws RemoteException {
+    if (permNames == null || pkgNames == null || userIds == null) {
+      throw new IllegalArgumentException("Null array");
+    }
+    if (permNames.length != pkgNames.length || permNames.length != userIds.length) {
+      throw new IllegalArgumentException("Array length mismatch");
+    }
+
+    int[] flags = new int[permNames.length];
+
+    for (int i = 0; i < permNames.length; i++) {
+      try {
+        flags[i] = HiddenAPIs.INS.getPermFlags(permNames[i], pkgNames[i], userIds[i], mCallback);
+      } catch (RemoteException | NoSuchMethodError | SecurityException e) {
+        flags[i] = -1;
+        if (mPermFlagsBatchErrLogLimiter.can(true)) {
+          mCallback.logErr(TAG, "getPermFlagsBatch", e);
+        }
+      }
+    }
+
+    return flags;
   }
 
   private final AppOpsErrorCallbackImpl mAppOpsErrorCb = new AppOpsErrorCallbackImpl();

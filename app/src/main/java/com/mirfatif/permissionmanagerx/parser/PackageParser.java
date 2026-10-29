@@ -10,10 +10,12 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.PermissionInfo;
 import android.content.pm.Signature;
+import android.os.BadParcelableException;
 import android.os.Build;
 import android.os.Build.VERSION;
 import android.os.Build.VERSION_CODES;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleEventObserver;
 import androidx.lifecycle.LiveData;
@@ -27,12 +29,14 @@ import com.mirfatif.permissionmanagerx.prefs.MySettings;
 import com.mirfatif.permissionmanagerx.privs.DaemonHandler;
 import com.mirfatif.permissionmanagerx.privs.DaemonIface;
 import com.mirfatif.permissionmanagerx.util.ApiUtils;
+import com.mirfatif.permissionmanagerx.util.PkgIconCache;
 import com.mirfatif.permissionmanagerx.util.UserUtils;
 import com.mirfatif.permissionmanagerx.util.bg.LiveEvent;
 import com.mirfatif.permissionmanagerx.util.bg.UiRunner;
 import com.mirfatif.privtasks.Constants;
 import com.mirfatif.privtasks.HiddenSdkIntConstants;
 import com.mirfatif.privtasks.bind.MyPackageOps;
+import com.mirfatif.privtasks.bind.MyPkgOpsBatch;
 import com.mirfatif.privtasks.bind.PermFixedFlags;
 import com.mirfatif.privtasks.util.MyLog;
 import com.mirfatif.privtasks.util.Util;
@@ -45,6 +49,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -66,6 +71,24 @@ public enum PackageParser {
   private final LiveEvent<Integer> mListCompleted = new LiveEvent<>(true);
 
   private final List<PackageInfo> mPkgInfoList = new ArrayList<>();
+
+  /**
+   * Guards {@link #mPkgInfoList}, {@link #mPkgLabels} and {@link #mPkgInfoListExcludeSystem}. The
+   * list and its labels form one generation of prefetched data, so they are replaced and cleared
+   * together under this lock; otherwise a clear between the two writes would leave labels of one
+   * generation paired with PackageInfo objects of another.
+   */
+  private final Object mPkgInfoLock = new Object();
+
+  /**
+   * Labels of the packages in {@link #mPkgInfoList}, resolved once when that list is built so that
+   * {@code loadLabel()} (an IPC to system_server) is not called from the sort comparator and then
+   * again for every package. PackageInfo objects are used as identity keys: a package name alone is
+   * not unique across users. The map shares the lifetime of {@link #mPkgInfoList} and is cleared
+   * together with it.
+   */
+  private final Map<PackageInfo, String> mPkgLabels = new IdentityHashMap<>();
+
   private final List<Package> mPkgList = new ArrayList<>();
 
   public boolean mOpModesConsistent = true;
@@ -78,7 +101,11 @@ public enum PackageParser {
       new SingleSchedTaskExecutor(this::clearPkgInfoList, TAG + "-PkgInfoListCleaner");
 
   public void updatePkgListIfChanged() {
-    if (mPkgInfoList.isEmpty() || mPkgList.isEmpty()) {
+    boolean pkgInfoListEmpty;
+    synchronized (mPkgInfoLock) {
+      pkgInfoListEmpty = mPkgInfoList.isEmpty();
+    }
+    if (pkgInfoListEmpty || mPkgList.isEmpty()) {
       updatePkgList();
     }
   }
@@ -105,48 +132,346 @@ public enum PackageParser {
   private List<Package> updatePkgListInternal() {
     mListInProgress.postValue(true);
 
-    mPkgInfoListCleaner.cancel(false);
-    List<PackageInfo> pkgInfoList = buildPkgInfoList();
+    List<Package> pkgList = Collections.synchronizedList(new ArrayList<>());
 
-    buildRequiredData();
+    // Publishing a copy of the whole list for every package is quadratic. Intermediate snapshots
+    // are throttled by count and by time instead; the final snapshot below is sent only when the
+    // loop really completes.
+    int pkgsSinceLastPost = 0;
+    long lastPostTime = SystemClock.elapsedRealtime();
+    boolean interrupted = false;
+    boolean completed = false;
 
-    setProgress(pkgInfoList.size(), true, true);
+    try {
+      // Building the source list belongs to the same unit of work as the loop: it asks the
+      // PackageManager and can fail the same way, and an exception escaping from here would kill
+      // the worker thread instead of being reported.
+      mPkgInfoListCleaner.cancel(false);
+      List<PackageInfo> pkgInfoList = buildPkgInfoList();
 
-    final List<Package> pkgList = Collections.synchronizedList(new ArrayList<>());
+      buildRequiredData();
 
-    int size = pkgInfoList.size();
+      setProgress(pkgInfoList.size(), true, true);
 
-    for (int i = 0; i < size; i++) {
-      if (Thread.interrupted()) {
-        return null;
+      int size = pkgInfoList.size();
+      // Prefetch the AppOps and permission flags the loop below is about to fetch one IPC at a
+      // time. The maps are thread local and removed in the finally block, so they never outlive
+      // this call and never leak into a single-package refresh (which stays on the old path).
+      mAppOpsPrefetched.set(prefetchAppOps(pkgInfoList));
+      mPermFlagsPrefetched.set(prefetchPermFlags(pkgInfoList));
+
+      for (int i = 0; i < size; i++) {
+        if (Thread.interrupted()) {
+          interrupted = true;
+          break;
+        }
+
+        setProgress(i, false, false);
+        PackageInfo pkgInfo = pkgInfoList.get(i);
+
+        if (pkgInfo == null) {
+          continue;
+        }
+
+        Package pkg = new Package();
+        if (isPkgUpdated(pkgInfo, pkg, true)) {
+          pkgList.add(pkg);
+
+          if (mDoRepeatUpdates) {
+            pkgsSinceLastPost++;
+            boolean countReached = pkgsSinceLastPost >= PKG_LIST_POST_MIN_COUNT;
+            boolean timeReached =
+                SystemClock.elapsedRealtime() - lastPostTime >= PKG_LIST_POST_MIN_INTERVAL_MS;
+            if (countReached || timeReached) {
+              pkgsSinceLastPost = 0;
+              lastPostTime = SystemClock.elapsedRealtime();
+              updateAndPostLivePkgList(pkgList, false);
+            }
+          }
+        }
       }
 
-      setProgress(i, false, false);
-      PackageInfo pkgInfo = pkgInfoList.get(i);
+      if (!interrupted) {
+        setProgress(size, false, true);
+        completed = true;
+      }
+    } catch (RuntimeException e) {
+      // A scan must never take the worker thread down: the executor only wraps the task in a
+      // try/finally, so an escaping exception would leave isUpdating() true for good and make
+      // every later refresh block on the queue. The common source is a batch that fell back to
+      // the per-item path and then hit a RuntimeException there.
+      MyLog.e(TAG, "updatePkgListInternal", e);
+    } finally {
+      mAppOpsPrefetched.remove();
+      mPermFlagsPrefetched.remove();
 
-      if (pkgInfo == null) {
+      // Only a completed scan may publish the final snapshot. An interrupted or failed scan would
+      // otherwise broadcast a partial (even empty) list as "scan finished": the main screen would
+      // flash an empty list and "0 apps" until the next scan republishes its own result.
+      if (completed) {
+        updateAndPostLivePkgList(pkgList, true);
+      } else {
+        // The list is not published, but the completion event still has to be sent: the pull
+        // refresh indicator and the progress bar wait for it and would otherwise spin until the
+        // next scan. A negative count tells the UI not to report a package count.
+        sendListCompleted(PostListStatus.FINAL, -1);
+      }
+
+      // These two steps must run on every return path, including an interrupt or an exception:
+      // otherwise the list stays marked as "in progress" and the PackageInfo cache is never
+      // scheduled for its delayed cleanup.
+      mPkgInfoListCleaner.cancelAndSchedule(false, 30, TimeUnit.SECONDS);
+      mListInProgress.postValue(false);
+    }
+
+    if (interrupted) {
+      return null;
+    }
+
+    return getPkgList();
+  }
+
+  private static final int PKG_LIST_POST_MIN_COUNT = 25;
+  private static final long PKG_LIST_POST_MIN_INTERVAL_MS = 100;
+
+  /**
+   * Number of packages per batched AppOps prefetch. A Binder transaction is limited to 1 MB, and
+   * the reply is the expensive direction: every op entry is 16 bytes plus a 4-byte presence marker
+   * written by writeTypedList, so a package costs roughly {@code 44 + 4 * nameLen + 20 * (pkgOps +
+   * uidOps)} bytes. A system app with a few hundred ops set is about 8 KB, which puts 50 packages
+   * near 400 KB in the worst case and around 40 KB typically. Chunking keeps a transaction well
+   * inside the limit (TransactionTooLargeException) while still replacing up to 50 single-package
+   * round trips - 100 IPCs - with one.
+   */
+  private static final int MAX_PKGS_PER_BATCH = 50;
+
+  /**
+   * Number of (permission, package, user) triples per batched permission flags request. The request
+   * is the expensive direction here: an item costs {@code 16 + 2 * (permNameLen + pkgNameLen)}
+   * bytes, so 1000 items with 60-character names are about 256 KB, while 2000 of them would already
+   * sit at half of the 1 MB Binder limit.
+   */
+  private static final int MAX_FLAGS_PER_BATCH = 1000;
+
+  /** Minimum interval between two "batched IPC is not available" log lines. */
+  private static final long BATCH_FALLBACK_LOG_INTERVAL_MS = 60_000;
+
+  private long mLastBatchFallbackLog;
+
+  /**
+   * AppOps fetched by {@link #prefetchAppOps(List)} for the package list being parsed, keyed by
+   * {@link #appOpsBatchKey(int, String)}. It is a {@link ThreadLocal} on purpose: it only exists
+   * for the duration of one {@link #updatePkgListInternal()} run, so a single-package refresh from
+   * another thread keeps using the per-package IPC path and the data can never outlive the refresh.
+   */
+  private final ThreadLocal<Map<String, MyPkgOpsBatch>> mAppOpsPrefetched = new ThreadLocal<>();
+
+  /** Same as {@link #mAppOpsPrefetched}, for {@link #prefetchPermFlags(List)}. */
+  private final ThreadLocal<Map<String, Integer>> mPermFlagsPrefetched = new ThreadLocal<>();
+
+  private static String appOpsBatchKey(int uid, String pkgName) {
+    return uid + ":" + pkgName;
+  }
+
+  private static String permFlagsBatchKey(String permName, String pkgName, int userId) {
+    return permName + ":" + pkgName + ":" + userId;
+  }
+
+  /**
+   * Logs an exception thrown by a batched request. A {@code BadParcelableException} is reported at
+   * error level and without the rate limit: it means the two sides disagree on the parcel layout,
+   * which happens with a daemon that was started by an older build and is still alive. Rate
+   * limiting that would hide a permanent, silent fall back to the per-item path.
+   */
+  private void logBatchException(String method, RuntimeException e) {
+    if (e instanceof BadParcelableException) {
+      MyLog.e(TAG, method, e);
+      return;
+    }
+    logBatchFallback(method, e.toString());
+  }
+
+  /**
+   * Logs that a batched request could not be used and the per-item calls are used instead. Rate
+   * limited: the fallback is decided per chunk, and a whole refresh must not flood the log.
+   */
+  private void logBatchFallback(String method, String reason) {
+    long now = SystemClock.elapsedRealtime();
+    if (mLastBatchFallbackLog != 0
+        && now - mLastBatchFallbackLog < BATCH_FALLBACK_LOG_INTERVAL_MS) {
+      return;
+    }
+    mLastBatchFallbackLog = now;
+    MyLog.i(TAG, method, "Batched IPC not available, using per-item calls: " + reason);
+  }
+
+  /**
+   * Fetches the AppOps of the packages that are about to be parsed, one IPC per {@link
+   * #MAX_PKGS_PER_BATCH} packages instead of two IPCs per package, and returns them keyed by uid
+   * and package name.
+   *
+   * <p>The request is chunked because of the 1 MB Binder transaction limit (see {@link
+   * #MAX_PKGS_PER_BATCH}). A chunk that fails, returns null (an old daemon which does not know the
+   * batch transaction) or returns a differently sized list is simply left out of the map: the
+   * packages it covers are then fetched one by one by {@link #createAppOpsList}, exactly as before,
+   * so a broken or older daemon only loses the speed-up and never data.
+   *
+   * <p>Chunk results are matched to the request by index, never by package name: uid-mode results
+   * carry a null package name, so a name lookup would misattribute them.
+   */
+  private Map<String, MyPkgOpsBatch> prefetchAppOps(List<PackageInfo> pkgInfoList) {
+    Map<String, MyPkgOpsBatch> prefetched = new HashMap<>();
+
+    if (!AppOpsParser.INS.hasAppOps()) {
+      // Nothing to prefetch: createSetAppOps() is not called at all in this case.
+      return prefetched;
+    }
+
+    List<PackageInfo> packages = new ArrayList<>(pkgInfoList.size());
+    for (PackageInfo pkgInfo : pkgInfoList) {
+      if (pkgInfo != null) {
+        packages.add(pkgInfo);
+      }
+    }
+
+    for (int start = 0; start < packages.size(); start += MAX_PKGS_PER_BATCH) {
+      int end = Math.min(start + MAX_PKGS_PER_BATCH, packages.size());
+      prefetchAppOpsChunk(packages.subList(start, end), prefetched);
+    }
+
+    return prefetched;
+  }
+
+  private void prefetchAppOpsChunk(List<PackageInfo> chunk, Map<String, MyPkgOpsBatch> prefetched) {
+    int count = chunk.size();
+    int[] uids = new int[count];
+    String[] pkgNames = new String[count];
+    for (int i = 0; i < count; i++) {
+      PackageInfo pkgInfo = chunk.get(i);
+      uids[i] = pkgInfo.applicationInfo.uid;
+      pkgNames[i] = pkgInfo.packageName;
+    }
+
+    List<MyPkgOpsBatch> batches;
+    try {
+      // Null ops means all ops, the same request as getOpsForPackage(uid, pkgName, null).
+      batches = AppOpsParser.INS.getOpsForPkgs(uids, pkgNames, null);
+    } catch (RuntimeException e) {
+      logBatchException("prefetchAppOps", e);
+      return;
+    }
+
+    if (batches == null || batches.size() != count) {
+      logBatchFallback("prefetchAppOps", "no batched result");
+      return;
+    }
+
+    for (int i = 0; i < count; i++) {
+      MyPkgOpsBatch batch = batches.get(i);
+      if (batch == null) {
+        continue;
+      }
+      // A null package-ops list means the daemon could not read this package, not that it has no
+      // ops. Leave it out so that createAppOpsList() fetches it the old way.
+      //
+      // uidOps being null is NOT a failure: with a null pkgName the framework call answers the
+      // uid-mode ops of a package, and on some ROMs it throws an NPE, which the daemon reports as
+      // null while the package ops of the same package are perfectly good. The old per-package
+      // path skips a null uid-ops list, so doing the same here is equivalent and keeps the batch
+      // useful on those ROMs.
+      if (batch.pkgOps == null) {
+        continue;
+      }
+      prefetched.put(appOpsBatchKey(uids[i], pkgNames[i]), batch);
+    }
+  }
+
+  /**
+   * Same idea as {@link #prefetchAppOps(List)}, for the permission flags of system and framework
+   * apps: those flags are only needed while walking requestedPermissions, so the (permission,
+   * package, user) triples are collected up front and fetched in chunks of {@link
+   * #MAX_FLAGS_PER_BATCH}. Ordinary user apps are skipped, exactly as {@link #createPerm} does.
+   *
+   * <p>A failed chunk (null result, old daemon, exception) or a negative flag (the daemon's marker
+   * for a failed item) is not cached, so {@link #getPermissionFlags} falls back to the single-item
+   * IPC for those triples. Behaviour is unchanged, only the number of round trips is.
+   */
+  private Map<String, Integer> prefetchPermFlags(List<PackageInfo> pkgInfoList) {
+    Map<String, Integer> prefetched = new HashMap<>();
+
+    if (!DaemonHandler.INS.isDaemonAlive()) {
+      // Without a daemon getPermissionFlags() always yields -1, so do not even ask.
+      return prefetched;
+    }
+
+    List<String> permNames = new ArrayList<>(MAX_FLAGS_PER_BATCH);
+    List<String> pkgNames = new ArrayList<>(MAX_FLAGS_PER_BATCH);
+    List<Integer> userIds = new ArrayList<>(MAX_FLAGS_PER_BATCH);
+
+    for (PackageInfo pkgInfo : pkgInfoList) {
+      if (pkgInfo == null || pkgInfo.requestedPermissions == null) {
+        continue;
+      }
+      if (!isSystemApp(pkgInfo) && !isFrameworkApp(pkgInfo)) {
         continue;
       }
 
-      Package pkg = new Package();
-      if (isPkgUpdated(pkgInfo, pkg, true)) {
-        pkgList.add(pkg);
+      int userId = UserUtils.getUserId(pkgInfo.applicationInfo.uid);
+      for (String requestedPerm : pkgInfo.requestedPermissions) {
+        // The same normalisation as getPermList() applies, so that the keys match.
+        permNames.add(requestedPerm.replaceAll("\\s", ""));
+        pkgNames.add(pkgInfo.packageName);
+        userIds.add(userId);
 
-        if (mDoRepeatUpdates) {
-          updateAndPostLivePkgList(pkgList, false);
+        if (permNames.size() == MAX_FLAGS_PER_BATCH) {
+          prefetchPermFlagsChunk(permNames, pkgNames, userIds, prefetched);
+          permNames.clear();
+          pkgNames.clear();
+          userIds.clear();
         }
       }
     }
 
-    setProgress(size, false, true);
+    if (!permNames.isEmpty()) {
+      prefetchPermFlagsChunk(permNames, pkgNames, userIds, prefetched);
+    }
 
-    updateAndPostLivePkgList(pkgList, true);
+    return prefetched;
+  }
 
-    mPkgInfoListCleaner.cancelAndSchedule(false, 30, TimeUnit.SECONDS);
+  private void prefetchPermFlagsChunk(
+      List<String> permNames,
+      List<String> pkgNames,
+      List<Integer> userIds,
+      Map<String, Integer> prefetched) {
+    int count = permNames.size();
+    String[] perms = permNames.toArray(new String[0]);
+    String[] pkgs = pkgNames.toArray(new String[0]);
+    int[] users = new int[count];
+    for (int i = 0; i < count; i++) {
+      users[i] = userIds.get(i);
+    }
 
-    mListInProgress.postValue(false);
+    int[] flags;
+    try {
+      flags = DaemonIface.INS.getPermFlagsBatch(perms, pkgs, users);
+    } catch (RuntimeException e) {
+      logBatchException("prefetchPermFlags", e);
+      return;
+    }
 
-    return getPkgList();
+    if (flags == null || flags.length != count) {
+      logBatchFallback("prefetchPermFlags", "no batched result");
+      return;
+    }
+
+    for (int i = 0; i < count; i++) {
+      if (flags[i] < 0) {
+        // Failed item: leave it out so that getPermissionFlags() retries it with a single IPC.
+        continue;
+      }
+      prefetched.put(permFlagsBatchKey(perms[i], pkgs[i], users[i]), flags[i]);
+    }
   }
 
   private boolean isUpdating() {
@@ -163,15 +488,16 @@ public enum PackageParser {
   private List<PackageInfo> buildPkgInfoList() {
     boolean excludeSystem = isSystemAppsExcluded();
 
-    List<PackageInfo> pkgInfoList = new ArrayList<>(mPkgInfoList);
-
-    if (!pkgInfoList.isEmpty() && Objects.equals(mPkgInfoListExcludeSystem, excludeSystem)) {
-      return pkgInfoList;
+    synchronized (mPkgInfoLock) {
+      List<PackageInfo> cachedList = new ArrayList<>(mPkgInfoList);
+      if (!cachedList.isEmpty() && Objects.equals(mPkgInfoListExcludeSystem, excludeSystem)) {
+        return cachedList;
+      }
     }
 
     setProgress(CREATE_LIST, true, false);
 
-    pkgInfoList.clear();
+    List<PackageInfo> pkgInfoList = new ArrayList<>();
     pkgInfoList.addAll(
         ApiUtils.getInstalledPackages(PackageManager.GET_PERMISSIONS | PM_GET_SIGNATURES));
 
@@ -183,19 +509,38 @@ public enum PackageParser {
       pkgInfoList.removeIf(this::isSystemApp);
     }
 
-    setProgress(SORT_LIST, true, false);
-    pkgInfoList.sort(
-        Comparator.comparing(
-            pkgInfo -> pkgInfo.applicationInfo.loadLabel(mPm).toString().toUpperCase()));
-
-    synchronized (mPkgInfoList) {
-      mPkgInfoList.clear();
-      mPkgInfoList.addAll(pkgInfoList);
+    // Resolve one label per package before sorting: loadLabel() is an IPC, and the comparator
+    // below would otherwise call it O(n log n) times. The same prefetched string is reused while
+    // building the Package objects.
+    Map<PackageInfo, String> labels = new IdentityHashMap<>(pkgInfoList.size());
+    for (PackageInfo pkgInfo : pkgInfoList) {
+      labels.put(pkgInfo, pkgInfo.applicationInfo.loadLabel(mPm).toString());
     }
 
-    mPkgInfoListExcludeSystem = excludeSystem;
+    setProgress(SORT_LIST, true, false);
+    pkgInfoList.sort(Comparator.comparing(pkgInfo -> labels.get(pkgInfo).toUpperCase()));
+
+    // Publish the PackageInfo list and its labels as one generation, under one lock.
+    synchronized (mPkgInfoLock) {
+      mPkgInfoList.clear();
+      mPkgInfoList.addAll(pkgInfoList);
+      mPkgLabels.clear();
+      mPkgLabels.putAll(labels);
+      mPkgInfoListExcludeSystem = excludeSystem;
+    }
 
     return pkgInfoList;
+  }
+
+  /** Returns the prefetched label of {@code pkgInfo}, loading it on demand if it is not cached. */
+  private String getPkgLabel(PackageInfo pkgInfo) {
+    synchronized (mPkgInfoLock) {
+      String label = mPkgLabels.get(pkgInfo);
+      if (label != null) {
+        return label;
+      }
+    }
+    return pkgInfo.applicationInfo.loadLabel(mPm).toString();
   }
 
   {
@@ -214,8 +559,9 @@ public enum PackageParser {
   }
 
   public void clearPkgInfoList() {
-    synchronized (mPkgInfoList) {
+    synchronized (mPkgInfoLock) {
       mPkgInfoList.clear();
+      mPkgLabels.clear();
       mPkgInfoListExcludeSystem = null;
     }
   }
@@ -294,6 +640,9 @@ public enum PackageParser {
   }
 
   public void updatePackage(Package pkg, boolean filterPerms) {
+    // An updated package needs no explicit icon cache invalidation: the cache key contains the
+    // update time copied in isPkgUpdated() from PackageInfo.lastUpdateTime, so the upgrade itself
+    // makes the old entry unreachable. The icon is reloaded on the next bind with the new key.
     PackageInfo packageInfo =
         PackageParser.getPkgInfo(pkg.getName(), PackageManager.GET_PERMISSIONS);
 
@@ -310,6 +659,10 @@ public enum PackageParser {
   }
 
   public void removePackage(Package pkg) {
+    // An uninstalled package must not leave a cached icon behind, for any user profile. This is
+    // also safe while a rebuild is pending: the cache is only a cache.
+    PkgIconCache.remove(pkg.getName());
+
     if (isUpdating()) {
       updatePkgList();
       return;
@@ -351,17 +704,21 @@ public enum PackageParser {
   }
 
   private void updateAndPostLivePkgList(List<Package> pkgList, boolean isFinal) {
+    // Take a single snapshot. Observers must get a list which the building thread never modifies
+    // again, and mPkgList is filled from that very snapshot instead of being copied a second time.
+    List<Package> snapshot;
     synchronized (mPkgList) {
       if (pkgList != null) {
         mPkgList.clear();
         mPkgList.addAll(pkgList);
       }
+      snapshot = new ArrayList<>(mPkgList);
     }
 
     if (!MySettings.INS.isSearching()) {
-      postLivePkgList(mPkgList, isFinal);
+      mPkgListLive.postValue(snapshot, isFinal);
       if (isFinal) {
-        sendListCompleted(PostListStatus.FINAL, mPkgList.size());
+        sendListCompleted(PostListStatus.FINAL, snapshot.size());
       }
     } else {
       handleSearchQuery(isFinal ? PostListStatus.FINAL : PostListStatus.NOT_FINAL);
@@ -450,21 +807,37 @@ public enum PackageParser {
 
     Boolean pkgIsReferenced = true;
 
-    if (permList.parallelStream().anyMatch(perm -> Boolean.FALSE.equals(perm.isReferenced()))) {
+    // A single pass instead of two parallel streams: "not referenced" wins over "unknown", and
+    // isChangeable() is only consulted for permissions whose reference state is null, exactly as
+    // before.
+    boolean hasNotReferencedPerm = false;
+    boolean hasChangeableNullRefPerm = false;
+    for (Permission perm : permList) {
+      Boolean isReferenced = perm.isReferenced();
+      if (Boolean.FALSE.equals(isReferenced)) {
+        hasNotReferencedPerm = true;
+        break;
+      }
+      if (isReferenced == null && perm.isChangeable()) {
+        hasChangeableNullRefPerm = true;
+      }
+    }
+
+    if (hasNotReferencedPerm) {
       pkgIsReferenced = false;
-    } else if (permList.parallelStream()
-        .anyMatch(perm -> perm.isReferenced() == null && perm.isChangeable())) {
+    } else if (hasChangeableNullRefPerm) {
       pkgIsReferenced = null;
     }
 
     pkg.updatePackage(
-        appInfo.loadLabel(mPm).toString(),
+        getPkgLabel(pkgInfo),
         pkgInfo.packageName,
         permList,
         isFrameworkApp,
         isSystemApp,
         isEnabled,
         appInfo.uid,
+        pkgInfo.lastUpdateTime,
         pkgIsReferenced);
 
     return true;
@@ -697,13 +1070,23 @@ public enum PackageParser {
   }
 
   private int getPermissionFlags(String perm, PackageInfo pkgInfo) {
+    int userId = UserUtils.getUserId(pkgInfo.applicationInfo.uid);
+
+    // Filled by prefetchPermFlags() during a full list refresh; null on the single-package path.
+    Map<String, Integer> prefetched = mPermFlagsPrefetched.get();
+    if (prefetched != null) {
+      Integer prefetchedFlags =
+          prefetched.get(permFlagsBatchKey(perm, pkgInfo.packageName, userId));
+      if (prefetchedFlags != null) {
+        return prefetchedFlags;
+      }
+    }
+
     if (!DaemonHandler.INS.isDaemonAlive()) {
       return -1;
     }
 
-    Integer flags =
-        DaemonIface.INS.getPermFlags(
-            perm, pkgInfo.packageName, UserUtils.getUserId(pkgInfo.applicationInfo.uid));
+    Integer flags = DaemonIface.INS.getPermFlags(perm, pkgInfo.packageName, userId);
 
     if (flags != null) {
       return flags;
@@ -760,43 +1143,78 @@ public enum PackageParser {
     boolean isExtraAppOp = ops != null;
     int uid = packageInfo.applicationInfo.uid;
 
-    List<MyPackageOps> list;
     if (isExtraAppOp) {
       for (int op : ops) {
-        list = AppOpsParser.INS.getOpsForPackage(uid, packageInfo.packageName, op);
+        List<MyPackageOps> list =
+            AppOpsParser.INS.getOpsForPackage(uid, packageInfo.packageName, op);
+        if (list == null) {
+          continue;
+        }
+        if (list.isEmpty()) {
+          int[] count =
+              createAppOp(
+                  packageInfo,
+                  op,
+                  null,
+                  permissionsList,
+                  processedAppOps,
+                  true,
+                  false,
+                  -1,
+                  filterPerms);
+          totalAppOpsCount += count[0];
+          appOpsCount += count[1];
+        } else {
+          pkgOpsList.addAll(list);
+        }
+      }
+    } else {
+      Map<String, MyPkgOpsBatch> prefetched = mAppOpsPrefetched.get();
+      MyPkgOpsBatch batch =
+          prefetched == null ? null : prefetched.get(appOpsBatchKey(uid, packageInfo.packageName));
+
+      if (batch != null) {
+        pkgOpsList.addAll(batch.pkgOps);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && batch.uidOps != null) {
+          pkgOpsList.addAll(batch.uidOps);
+        }
+      } else {
+        List<MyPackageOps> list =
+            AppOpsParser.INS.getOpsForPackage(uid, packageInfo.packageName, null);
         if (list != null) {
-          if (list.isEmpty()) {
-            int[] count =
-                createAppOp(
-                    packageInfo,
-                    op,
-                    null,
-                    permissionsList,
-                    processedAppOps,
-                    true,
-                    false,
-                    -1,
-                    filterPerms);
-            totalAppOpsCount += count[0];
-            appOpsCount += count[1];
-          } else {
+          pkgOpsList.addAll(list);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          list = AppOpsParser.INS.getUidOps(uid);
+          if (list != null) {
             pkgOpsList.addAll(list);
           }
         }
       }
-    } else {
-      list = AppOpsParser.INS.getOpsForPackage(uid, packageInfo.packageName, null);
-      if (list != null) {
-        pkgOpsList.addAll(list);
-      }
-
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        list = AppOpsParser.INS.getUidOps(uid);
-        if (list != null) {
-          pkgOpsList.addAll(list);
-        }
-      }
     }
+
+    int[] counts =
+        createAppOpsListFromOps(
+            packageInfo, pkgOpsList, permissionsList, processedAppOps, isExtraAppOp, filterPerms);
+
+    return new int[] {totalAppOpsCount + counts[0], appOpsCount + counts[1]};
+  }
+
+  /**
+   * Builds the {@link Permission} objects of a list of ops and returns {@code {total, shown}}
+   * counts. Split out of {@link #createAppOpsList} so that both the batched and the per-item
+   * fetches share exactly the same assembling logic.
+   */
+  private int[] createAppOpsListFromOps(
+      PackageInfo packageInfo,
+      List<MyPackageOps> pkgOpsList,
+      List<Permission> permissionsList,
+      List<Integer> processedAppOps,
+      boolean isExtraAppOp,
+      boolean filterPerms) {
+    int totalAppOpsCount = 0;
+    int appOpsCount = 0;
 
     for (MyPackageOps myPackageOps : pkgOpsList) {
       boolean isPerUid = myPackageOps.pkgName == null;
@@ -818,6 +1236,7 @@ public enum PackageParser {
         appOpsCount += count[1];
       }
     }
+
     return new int[] {totalAppOpsCount, appOpsCount};
   }
 

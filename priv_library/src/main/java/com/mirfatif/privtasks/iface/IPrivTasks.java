@@ -8,6 +8,7 @@ import android.os.RemoteException;
 import com.mirfatif.err.ContainerException;
 import com.mirfatif.privtasks.bind.AppOpsLists;
 import com.mirfatif.privtasks.bind.MyPackageOps;
+import com.mirfatif.privtasks.bind.MyPkgOpsBatch;
 import com.mirfatif.privtasks.bind.PermFixedFlags;
 import com.mirfatif.privtasks.bind.PrivsStatus;
 import java.util.List;
@@ -51,9 +52,27 @@ public interface IPrivTasks extends IInterface {
 
   void openAppInfo(String pkgName, int userId) throws RemoteException;
 
+  // Batched variants. They are appended at the end of the method list on purpose: transaction
+  // codes are derived from declaration order, so new codes are always greater than old ones and
+  // old daemons simply reject the unknown transactions (transact() returns false).
+
+  List<MyPkgOpsBatch> getOpsForPackages(int[] uids, String[] pkgNames, int[] ops)
+      throws RemoteException;
+
+  int[] getPermFlagsBatch(String[] permNames, String[] pkgNames, int[] userIds)
+      throws RemoteException;
+
   abstract class Stub extends Binder implements IPrivTasks {
 
     private static final String DESCRIPTOR = "com.mirfatif.privtasks.iface.IPrivTasks";
+
+    /**
+     * Source of the transaction codes. It must stay declared above every {@code TRANSACTION_*}
+     * constant: static initialisers run in textual order, so a counter declared after them would
+     * already be back at 0 when a newly appended constant asks for its code, and the new
+     * transaction would silently collide with an old one.
+     */
+    private static int CODE = 0;
 
     public Stub() {
       attachInterface(this, DESCRIPTOR);
@@ -103,6 +122,10 @@ public interface IPrivTasks extends IInterface {
         setPkgState(data, reply);
       } else if (code == TRANSACTION_openAppInfo) {
         openAppInfo(data, reply);
+      } else if (code == TRANSACTION_getOpsForPackages) {
+        getOpsForPackages(data, reply);
+      } else if (code == TRANSACTION_getPermFlagsBatch) {
+        getPermFlagsBatch(data, reply);
       } else {
         return super.onTransact(code, data, reply, flags);
       }
@@ -642,7 +665,113 @@ public interface IPrivTasks extends IInterface {
       }
     }
 
-    private static int CODE = 0;
+    private static final int TRANSACTION_getOpsForPackages = createTransactionCode();
+
+    private static List<MyPkgOpsBatch> getOpsForPackages(
+        int[] uids, String[] pkgNames, int[] ops, IBinder remote) throws RemoteException {
+      // Fail early on the client side. An empty array is a valid zero-item request. A null ops
+      // array is also valid: it means "every op of the package", exactly like the single-package
+      // getOpsForPackage(uid, pkgName, null). The two other arrays must be present and aligned.
+      if (uids == null || pkgNames == null) {
+        throw new IllegalArgumentException("Null array");
+      }
+      if (uids.length != pkgNames.length) {
+        throw new IllegalArgumentException("uids and pkgNames length mismatch");
+      }
+      Parcel data = obtainData(), reply = Parcel.obtain();
+
+      // Parcel order (must stay in sync with the server side): uids -> pkgNames -> ops.
+      data.writeIntArray(uids);
+      data.writeStringArray(pkgNames);
+      data.writeIntArray(ops);
+
+      try {
+        // An old daemon does not know this transaction and replies with false. Signal
+        // "unsupported" with null instead of throwing, so that the caller can fall back.
+        if (!remote.transact(TRANSACTION_getOpsForPackages, data, reply, 0)) {
+          return null;
+        }
+        readException(reply);
+        return reply.createTypedArrayList(MyPkgOpsBatch.CREATOR);
+      } finally {
+        recycle(data, reply);
+      }
+    }
+
+    private void getOpsForPackages(Parcel data, Parcel reply) {
+      initReply(data, reply);
+
+      // Parcel order (must stay in sync with the transact side): uids -> pkgNames -> ops.
+      int[] uids = data.createIntArray();
+      String[] pkgNames = data.createStringArray();
+      int[] ops = data.createIntArray();
+
+      try {
+        if (uids == null || pkgNames == null) {
+          throw new IllegalArgumentException("Null array");
+        }
+        if (uids.length != pkgNames.length) {
+          throw new IllegalArgumentException("uids and pkgNames length mismatch");
+        }
+        reply.writeTypedList(getOpsForPackages(uids, pkgNames, ops));
+      } catch (Throwable t) {
+        writeException(reply, t);
+      }
+    }
+
+    private static final int TRANSACTION_getPermFlagsBatch = createTransactionCode();
+
+    private static int[] getPermFlagsBatch(
+        String[] permNames, String[] pkgNames, int[] userIds, IBinder remote)
+        throws RemoteException {
+      // Fail early on the client side. An empty array is a valid zero-item request; null is not.
+      if (permNames == null || pkgNames == null || userIds == null) {
+        throw new IllegalArgumentException("Null array");
+      }
+      if (permNames.length != pkgNames.length || permNames.length != userIds.length) {
+        throw new IllegalArgumentException("Array length mismatch");
+      }
+
+      Parcel data = obtainData(), reply = Parcel.obtain();
+
+      // Parcel order (must stay in sync with the server side): permNames -> pkgNames -> userIds.
+      data.writeStringArray(permNames);
+      data.writeStringArray(pkgNames);
+      data.writeIntArray(userIds);
+
+      try {
+        // An old daemon does not know this transaction and replies with false. Signal
+        // "unsupported" with null instead of throwing, so that the caller can fall back.
+        if (!remote.transact(TRANSACTION_getPermFlagsBatch, data, reply, 0)) {
+          return null;
+        }
+        readException(reply);
+        return reply.createIntArray();
+      } finally {
+        recycle(data, reply);
+      }
+    }
+
+    private void getPermFlagsBatch(Parcel data, Parcel reply) {
+      initReply(data, reply);
+
+      // Parcel order (must stay in sync with the transact side): permNames -> pkgNames -> userIds.
+      String[] permNames = data.createStringArray();
+      String[] pkgNames = data.createStringArray();
+      int[] userIds = data.createIntArray();
+
+      try {
+        if (permNames == null || pkgNames == null || userIds == null) {
+          throw new IllegalArgumentException("Null array");
+        }
+        if (permNames.length != pkgNames.length || permNames.length != userIds.length) {
+          throw new IllegalArgumentException("Array length mismatch");
+        }
+        reply.writeIntArray(getPermFlagsBatch(permNames, pkgNames, userIds));
+      } catch (Throwable t) {
+        writeException(reply, t);
+      }
+    }
 
     private static int createTransactionCode() {
       return FIRST_CALL_TRANSACTION + CODE++;
@@ -765,6 +894,16 @@ public interface IPrivTasks extends IInterface {
 
       public void openAppInfo(String pkgName, int userId) throws RemoteException {
         Stub.openAppInfo(pkgName, userId, mRemote);
+      }
+
+      public List<MyPkgOpsBatch> getOpsForPackages(int[] uids, String[] pkgNames, int[] ops)
+          throws RemoteException {
+        return Stub.getOpsForPackages(uids, pkgNames, ops, mRemote);
+      }
+
+      public int[] getPermFlagsBatch(String[] permNames, String[] pkgNames, int[] userIds)
+          throws RemoteException {
+        return Stub.getPermFlagsBatch(permNames, pkgNames, userIds, mRemote);
       }
     }
   }

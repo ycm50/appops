@@ -14,6 +14,11 @@
 #     gradlePluginPortal / jitpack）。国内网络的加速靠本地开发时跑 ./gradlew downloadDeps 把依赖
 #     多线程下到 libs/maven-repo（见 buildSrc/src/main/kotlin/deps-download-conventions.gradle.kts）。
 #     CI 不跑 downloadDeps：runner 在海外，直接走原始仓库联网解析即可。
+#   * IPrivTasks.java 不是 AIDL，是手写 Parcel 协议：事务号由常量声明顺序决定
+#     （createTransactionCode() = FIRST_CALL_TRANSACTION + CODE++），新事务只能追加在末尾。
+#     插在中间会让它后面所有事务号位移，新旧 daemon 混跑时参数错位（崩溃或静默错乱）。
+#     CI 用 tools/check_ipc_protocol.py 兜住这个坑，基线常量名内嵌在脚本里，
+#     **追加新事务时要同步更新脚本里的基线清单**（BASELINE_TRANSACTIONS）。
 
 name: Build
 
@@ -88,6 +93,11 @@ jobs:
       # （spotlessCheck 本来也已经挂在 JavaCompile / KotlinCompile / preBuild 前面）
       - name: 代码格式检查
         run: ./gradlew spotlessCheck --stacktrace
+
+      # 纯静态检查：只读 IPrivTasks.java 源码，不依赖构建产物或 Android SDK，
+      # 所以放在编译前面，协议被改坏时能立刻失败，不用等 APK 编完。
+      - name: 校验 IPrivTasks 事务号没有被位移
+        run: python3 tools/check_ipc_protocol.py
 
       - name: 编译 debug 与 release
         run: ./gradlew :app:assembleDebug :app:assembleRelease --stacktrace

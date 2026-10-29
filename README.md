@@ -59,6 +59,20 @@ Manifest 权限就是通常所说的权限（存储、相机等）；AppOps（ap
 * **绑定竞态修复**：Shizuku 按用户服务缓存 `ServiceConnection`，切走档位时不会清理，旧回调可能在新一次绑定期间到达并把已连上的服务判成坏掉；`ShizukuDaemon` 用 bind epoch 丢弃过期回调。
 * **持续校验**：`tools/check_shizuku_user_service.py` 直接解析 APK 里的 DEX，确认用户服务与 AIDL `Stub` 仍在，CI 每次构建都会跑，避免这个坑被静默改回去。
 
+### 5. 性能优化
+
+* **AppOps 批量读取**：完整刷新时先按包预取 AppOps，`MAX_PKGS_PER_BATCH = 50`。原来每包要两次 app↔daemon 往返（包级 ops + UID 级 ops），50 个包最多 100 次 IPC；现在 50 个包一次事务。daemon 内部仍然逐包调用框架接口，省下的只是两端往返和 `DaemonIface` 锁的占用。
+* **权限 flags 批量读取**：`MAX_FLAGS_PER_BATCH = 1000`，把系统应用/框架应用的 `(权限, 包, 用户)` 三元组攒够 1000 项发一次；原来每一项一次 `getPermFlags` IPC。普通用户应用不需要这些 flags，预取按与 `createPerm()` 相同的条件跳过。
+* **分片的原因**：Binder 单事务上限 1MB，且回复方向才是大头。每个 op 条目 16 字节 + 4 字节 presence，单包约 `44 + 4 * 包名长度 + 20 * (pkgOps + uidOps)` 字节；系统应用全部 op 打开时一包约 8KB，50 包最坏约 400KB，留出余量；不分片会 `TransactionTooLargeException`。flags 请求方向每项约 `16 + 2 * (权限名 + 包名)` 字节，1000 项、60 字符的名字约 256KB，2000 项就到 1MB 的一半。
+* **失败语义**：单个包读取失败时，daemon 在该槽位返回 null 而不是空列表，只有这个包回落到逐项路径；分片整体失败、返回 null 或长度不符（旧 daemon 不认识新事务，`transact()` 返回 false）时整片回落。`BadParcelableException` 单独按 error 级别记录且不做频率限制：它说明新旧 daemon 的 parcel 布局不一致，是持续性的，压日志会让回退变成静默。
+* **事务号**：两个批量事务追加在 `IPrivTasks` 方法表末尾（第 19、20 个，`FIRST_CALL_TRANSACTION + 18/+19`）。这个接口不是 AIDL，事务号由 `TRANSACTION_*` 常量的声明顺序经 `createTransactionCode()` 生成，插在中间会让后面全部位移，新旧进程混跑时参数按别的接口解析。`tools/check_ipc_protocol.py` 在 CI 编译前校验：基线事务名内嵌在脚本里，新常量只能追加在末尾，`onTransact()` 分支与 `Proxy` 必须一一对应。
+* **列表构建**：每包的引用状态判断从两次 `parallelStream()` 改为一次遍历（「未引用」优先于「未知」，只在状态为 null 时才问 `isChangeable()`，语义不变）；小列表上并行流的调度开销大于遍历本身，提前退出后也不再扫完整个列表。
+* **标签只取一次**：`loadLabel()` 是到 system_server 的 IPC，原来排序比较器里会调用 O(n log n) 次，建 `Package` 时又调一次；现在建表时每个包取一次，排序和后续构建都复用。map 的键用 `PackageInfo` 实例而不是包名，因为同一包名在不同用户下不唯一。
+* **渐进刷新节流**：原来每加入一个包就把整张表复制一份并 post 给 UI，代价随包数平方增长；现在按 25 个包（`PKG_LIST_POST_MIN_COUNT`）或 100ms（`PKG_LIST_POST_MIN_INTERVAL_MS`）节流，扫描结束只再发一次最终快照。
+* **图标缓存**：新增 `PkgIconCache`，key = `userId + 包名 + lastUpdateTime`，列表模型本来就带着 `lastUpdateTime`，所以命中时零 `PackageManager` IPC，包升级后 key 自然变化，不需要按时间失效。缓存只存 `Drawable.ConstantState`，每次绑定 `newDrawable()` + `mutate()` 生成独立实例，避免多行共用同一个 Drawable 串味。`LruCache` 上限 8MB（`MAX_BYTES`），按字节计量：`BitmapDrawable` 用 `getAllocationByteCount()`，自适应图标与矢量图没有 Bitmap，按 intrinsic 尺寸 ×4 估算——`sizeOf()` 只认 `BitmapDrawable` 会让上限形同虚设。
+* **图标的限制**：8MB 只装得下约 30 个自适应图标，长列表仍会淘汰回源；`removePackage()` 会清掉该包在所有用户下的缓存，但没有监听 `PACKAGE_REPLACED` 广播，会话内升级要等下一次列表扫描（`lastUpdateTime` 变了）才换图，在那之前旧图会继续显示。
+* **兼容性与回退**：所有优化都保留原来的逐项路径。批量分片失败、旧 daemon 不认新事务、单个条目失败（AppOps 槽位为 null、flags 为 -1）都只影响那一片或那一条，其余照常；最坏情况是回到改动前的 IPC 次数，功能不退化。图标缓存未命中、`ConstantState` 为空或 `newDrawable()` 抛异常时，也仍然按原来的方式取图或留占位图。
+
 ## 使用前提
 
 * 设备需要 **root**，或启用 **开发者选项 → 无线调试**（ADB over network），或安装 **Shizuku**（或 Sui）并授权本应用。

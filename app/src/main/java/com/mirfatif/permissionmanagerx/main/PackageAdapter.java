@@ -2,6 +2,7 @@ package com.mirfatif.permissionmanagerx.main;
 
 import static com.mirfatif.permissionmanagerx.util.ApiUtils.getString;
 
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Color;
@@ -23,6 +24,7 @@ import com.mirfatif.permissionmanagerx.databinding.RvItemPkgBinding;
 import com.mirfatif.permissionmanagerx.main.PackageAdapter.ItemViewHolder;
 import com.mirfatif.permissionmanagerx.parser.Package;
 import com.mirfatif.permissionmanagerx.util.ApiUtils;
+import com.mirfatif.permissionmanagerx.util.PkgIconCache;
 import com.mirfatif.permissionmanagerx.util.StringUtils;
 import com.mirfatif.permissionmanagerx.util.UiUtils;
 import com.mirfatif.permissionmanagerx.util.bg.LiveSingleParamTask;
@@ -148,13 +150,44 @@ public class PackageAdapter extends MyListAdapter<Package, ItemViewHolder> {
     }
 
     private void setIcon(Package pkg) {
+      if (Thread.currentThread().isInterrupted()) {
+        return;
+      }
+
       try {
         int flags = PackageManager.MATCH_UNINSTALLED_PACKAGES;
-        Drawable icon = App.getPm().getApplicationIcon(ApiUtils.getAppInfo(pkg.getName(), flags));
-        if (!Thread.interrupted()) {
-          UiRunner.post(mLifecycleOwner, () -> mB.iconV.setImageDrawable(icon));
+        // Passing lastUpdateTime lets the cache hit by exact key: on a rebind of an unchanged
+        // package it returns without invoking the loader, i.e. without any PackageManager IPC.
+        Drawable icon =
+            PkgIconCache.getOrLoad(
+                pkg.getName(),
+                pkg.getUid(),
+                pkg.getLastUpdateTime(),
+                () -> {
+                  PackageInfo info = ApiUtils.getPkgInfo(pkg.getName(), flags);
+                  return new PkgIconCache.LoadedIcon(
+                      App.getPm().getApplicationIcon(info.applicationInfo), info.lastUpdateTime);
+                });
+
+        // A null icon is kept as the placeholder; setting it is not required and must not throw.
+        if (icon == null || Thread.interrupted()) {
+          return;
         }
-      } catch (NameNotFoundException ignored) {
+
+        UiRunner.post(
+            mLifecycleOwner,
+            () -> {
+              // The holder may have been rebound while the icon was loading.
+              Package bound = getPkg(getBindingAdapterPosition());
+              if (bound != null
+                  && bound.getName().equals(pkg.getName())
+                  && bound.getUid() == pkg.getUid()) {
+                mB.iconV.setImageDrawable(icon);
+              }
+            });
+      } catch (NameNotFoundException | RuntimeException ignored) {
+        // A missing package or a bad drawable must not reach the default uncaught exception
+        // handler from a list bind: the row keeps its placeholder icon instead.
       }
     }
   }

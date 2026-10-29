@@ -17,6 +17,7 @@ public class Package {
   private boolean mIsSystemApp;
   private boolean mIsEnabled;
   private int mUid;
+  private long mLastUpdateTime;
   private Boolean mIsReferenced;
 
   private int mTotalPermCount;
@@ -32,6 +33,7 @@ public class Package {
       boolean isSystemApp,
       boolean isEnabled,
       int uid,
+      long lastUpdateTime,
       Boolean reference) {
     mPackageLabel = label;
     mPackageName = name;
@@ -40,6 +42,7 @@ public class Package {
     mIsSystemApp = isSystemApp;
     mIsEnabled = isEnabled;
     mUid = uid;
+    mLastUpdateTime = lastUpdateTime;
     mIsReferenced = reference;
   }
 
@@ -158,6 +161,15 @@ public class Package {
     return mUid;
   }
 
+  /**
+   * Wall-clock time of the last package update, as reported by {@code PackageInfo.lastUpdateTime}.
+   * The package icon cache uses it as part of its key, so a package update maps to a new key
+   * without the PackageManager being queried on every list bind.
+   */
+  public long getLastUpdateTime() {
+    return mLastUpdateTime;
+  }
+
   public Boolean isReferenced() {
     return mIsReferenced;
   }
@@ -266,6 +278,13 @@ public class Package {
     }
 
     if (!mLastPermCount.equals(pkg.getPermCount())) {
+      return false;
+    }
+
+    // A package update has to reach the adapter even when nothing else changed: the row icon is
+    // cached under lastUpdateTime, so without a rebind the old icon would stay on screen until the
+    // next full list rebuild.
+    if (mLastUpdateTime != pkg.getLastUpdateTime()) {
       return false;
     }
 

@@ -60,7 +60,7 @@ public enum ShizukuDaemon {
    * <p>This is the "5 seconds without a response" rule: the Shizuku manager is asked first and Sui
    * second, so a manager that is not running must not hold the start-up up.
    */
-  private static final int PROVIDER_WAIT_MS = 5000;
+  private static final int PROVIDER_WAIT_MS = 2000;
 
   /**
    * Window for the user to answer a permission dialog. It is deliberately longer than {@link
@@ -468,6 +468,18 @@ public enum ShizukuDaemon {
       if (ThreadUtils.isMainThread()) {
         MyLog.e(TAG, "startServer", "Called on the main thread, cannot bind the user service");
         return false;
+      }
+
+      // The manager pushes its binder right after the app process starts, so a process that has
+      // been up for a while would otherwise wait out the whole window for nothing: the user taps
+      // the ADB checkbox, not a fresh start-up. Asking for the binder explicitly turns that wait
+      // into a short one, because the manager answers the request instead of a pending start-up.
+      if (!isAvailable() && isManagerInstalled()) {
+        try {
+          ShizukuProvider.requestBinderForNonProviderProcess(App.getCxt());
+        } catch (Throwable t) {
+          MyLog.e(TAG, "startServer", t);
+        }
       }
 
       // The Shizuku manager is asked first. When it answers at all it also stays the provider for

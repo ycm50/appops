@@ -108,27 +108,37 @@ dependencies {
 }
 
 tasks.register('buildNative', Exec) {
-    def props = new Properties()
-    props.load(new FileInputStream(new File(rootDir, "local.properties")))
-    def ndkDir = new File(props.get("sdk.dir").toString(), "ndk/" + NDK_VER)
-
-    if (!ndkDir.exists()) {
-        throw new GradleException('NDK ' + NDK_VER + ' not installed')
-    }
-
-    environment 'ANDROID_NDK', ndkDir.absolutePath
-    workingDir rootDir.absolutePath + "/native"
-    commandLine './build_native.sh'
-
-    // build_native.sh is a POSIX shell script and native/libcap is a git submodule, so the native
-    // binaries cannot be produced on Windows / without the submodule. Create the SKIP_NATIVE marker
-    // file in the project root to skip this step; the Java/Kotlin/resource build is unaffected.
+    // local.properties is not in the repository and does not have to exist while the project is
+    // being configured: Android Studio Sync, a fresh clone and CI all configure the build before
+    // (or without) one being written. Reading it here used to abort the whole configuration with a
+    // raw FileNotFoundException, which made the project unopenable instead of failing one task, so
+    // both the SDK lookup and the NDK check now happen when the task actually runs.
     onlyIf { !new File(rootDir, 'SKIP_NATIVE').exists() }
 
-    doLast {
-        if (executionResult.get().exitValue != 0) {
-            throw new GradleException('buildNative failed')
+    doFirst {
+        def localProps = new File(rootDir, 'local.properties')
+        if (!localProps.exists()) {
+            throw new GradleException('local.properties is missing: ' + localProps.absolutePath
+                    + ' (it must contain sdk.dir)')
         }
+
+        def props = new Properties()
+        localProps.withInputStream { props.load(it) }
+
+        def sdkDir = props.getProperty('sdk.dir')
+        if (sdkDir == null || sdkDir.isEmpty()) {
+            throw new GradleException('local.properties has no sdk.dir')
+        }
+
+        def ndkDir = new File(sdkDir, 'ndk/' + NDK_VER)
+        if (!ndkDir.exists()) {
+            throw new GradleException('NDK ' + NDK_VER + ' not installed in ' + sdkDir
+                    + ' (or create the SKIP_NATIVE marker to build the Java side only)')
+        }
+
+        environment 'ANDROID_NDK', ndkDir.absolutePath
+        workingDir rootDir.absolutePath + '/native'
+        commandLine './build_native.sh'
     }
 }
 
